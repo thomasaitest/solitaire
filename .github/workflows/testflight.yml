@@ -1,0 +1,66 @@
+# Builds the iOS app and uploads it to TestFlight.
+# Run it from the Actions tab. It does not run on push.
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   ASC_KEY_ID      App Store Connect API key ID
+#   ASC_ISSUER_ID   App Store Connect API issuer ID
+#   ASC_KEY_P8      Contents of the AuthKey .p8 file, or that file base64-encoded
+#   APPLE_TEAM_ID   10-character Team ID from developer.apple.com/account
+#
+# The first successful run stores the Apple Distribution private key in this
+# repo's Actions cache (fastlane/certs). That cache is not in git.
+
+name: TestFlight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    name: Build and upload
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build the web app
+        run: npm run build
+
+      - name: Sync the iOS project
+        run: npx cap sync ios
+
+      - name: Use Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Restore the distribution certificate
+        uses: actions/cache@v4
+        with:
+          path: fastlane/certs
+          key: ios-distribution-v1
+
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bundle exec fastlane ios beta

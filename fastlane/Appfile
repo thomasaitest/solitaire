@@ -1,0 +1,4 @@
+app_identifier("io.techbok.solitaire")
+
+# Membership Team ID, supplied in CI as APPLE_TEAM_ID. Leave unset for a local Xcode archive.
+team_id(ENV["APPLE_TEAM_ID"]) if ENV["APPLE_TEAM_ID"]

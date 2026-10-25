@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+    <meta name="theme-color" content="#0c4e2b" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="Classic Klondike solitaire. No ads, no accounts, plays offline." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Solitaire" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>Klondike Solitaire</title>
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #146b3c; }
+      html[data-theme="night"], html[data-theme="night"] body { background: #17211c; }
+    </style>
+    <script>
+      try {
+        var saved = JSON.parse(localStorage.getItem('klondike-settings-v1') || 'null');
+        var theme = saved && (saved.theme === 'night' || saved.theme === 'felt')
+          ? saved.theme
+          : (matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'felt');
+        document.documentElement.dataset.theme = theme;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', theme === 'night' ? '#101714' : '#0c4e2b');
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app" class="app">
+      <div class="stage">
+        <header class="hud" id="hud">
+          <button type="button" class="icon-btn" id="menu-btn" aria-label="Open menu">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <div class="hud-stats" role="group" aria-label="Game status">
+            <div class="stat">
+              <span class="stat-value" id="score">0</span>
+              <span class="stat-label">Score</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value" id="moves">0</span>
+              <span class="stat-label">Moves</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value" id="time">0:00</span>
+              <span class="stat-label" id="mode-label">Draw 3</span>
+            </div>
+          </div>
+          <button type="button" class="icon-btn" id="undo-btn" aria-label="Undo" disabled>
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <path d="M8 8H4.5V4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M5 9.5a7.5 7.5 0 1 1 1.4 5.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </header>
+        <p id="status" class="status" aria-live="polite"></p>
+        <main id="table" class="table" aria-label="Solitaire table"></main>
+      </div>
+    </div>
+    <div id="hint" class="hint" hidden></div>
+    <div id="overlay" class="overlay" hidden></div>
+    <div id="drag-layer"></div>
+    <p id="live" class="sr-only" aria-live="polite"></p>
+    <noscript><p class="noscript">Klondike needs JavaScript to deal the cards. Nothing here phones home.</p></noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
