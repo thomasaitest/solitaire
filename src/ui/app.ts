@@ -17,9 +17,10 @@ import {
 } from '../game/engine.ts';
 import type { GameState, PileRef } from '../game/types.ts';
 import { SUITS } from '../game/types.ts';
+import { findHint } from '../game/hint.ts';
 import { loadGame, loadSettings, loadStats, saveGame, saveSettings, saveStats } from '../storage.ts';
 import { Capacitor } from '@capacitor/core';
-import { suitSvg } from './cards.ts';
+import { cardLabel, suitSvg } from './cards.ts';
 import { computeLayout } from './layout.ts';
 import { renderTable } from './render.ts';
 import { shouldShowInstallHint } from './shell.ts';
@@ -52,11 +53,14 @@ export function startApp(root: HTMLElement): void {
   const scoreEl = document.getElementById('score');
   const movesEl = document.getElementById('moves');
   const timeEl = document.getElementById('time');
-  const modeEl = document.getElementById('mode-label');
+  const newButton = document.getElementById('new-btn');
+  const hintButton = document.getElementById('hint-btn');
+  const settingsButton = document.getElementById('settings-btn');
+  const restartButton = document.getElementById('restart-btn');
   const statusEl = document.getElementById('status');
   const hintEl = document.getElementById('hint');
   const liveEl = document.getElementById('live');
-  if (!table || !undoButton || !menuButton || !scoreEl || !movesEl || !timeEl || !modeEl || !statusEl || !hintEl || !liveEl) {
+  if (!table || !undoButton || !menuButton || !scoreEl || !movesEl || !timeEl || !statusEl || !hintEl || !liveEl) {
     return;
   }
 
@@ -90,6 +94,7 @@ export function startApp(root: HTMLElement): void {
   let hudCache = '';
   let lastSize = '';
   let lastPersist = elapsedMs;
+  let hintTimer: number | null = null;
 
   applyTheme(settings.theme);
   showInstallHint();
@@ -112,6 +117,10 @@ export function startApp(root: HTMLElement): void {
   table.addEventListener('pointercancel', onPointerCancel);
   undoButton.addEventListener('click', () => doUndo());
   menuButton.addEventListener('click', () => openMenu());
+  settingsButton?.addEventListener('click', () => openMenu());
+  newButton?.addEventListener('click', () => void askNewGame());
+  restartButton?.addEventListener('click', () => void askRestart());
+  hintButton?.addEventListener('click', () => showHint());
   window.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) persist();
@@ -191,7 +200,13 @@ export function startApp(root: HTMLElement): void {
 
   function hudHeight(): number {
     const hud = document.getElementById('hud');
-    return (hud?.offsetHeight ?? 56) + (statusEl?.offsetHeight ?? 0);
+    const dock = document.getElementById('dock');
+    const outer = (el: HTMLElement | null, fallback: number): number => {
+      if (!el) return fallback;
+      const css = getComputedStyle(el);
+      return el.offsetHeight + parseFloat(css.marginTop) + parseFloat(css.marginBottom);
+    };
+    return outer(hud, 64) + (statusEl?.offsetHeight ?? 0) + outer(dock, 0);
   }
 
   function updateHud(): void {
@@ -202,7 +217,6 @@ export function startApp(root: HTMLElement): void {
     scoreEl!.textContent = formatNumber(parts.total);
     movesEl!.textContent = String(state.moves);
     timeEl!.textContent = formatTime(elapsedMs);
-    modeEl!.textContent = state.drawCount === 1 ? 'Draw 1' : 'Draw 3';
     undoButton!.disabled = state.undos.length === 0;
   }
 
@@ -279,6 +293,7 @@ export function startApp(root: HTMLElement): void {
   }
 
   function applyResult(prev: GameState, next: GameState, rects: Map<string, DOMRect>, kind: ActionKind): void {
+    if (hintTimer !== null) clearHint();
     if (kind === 'draw') {
       const stockRect = document.querySelector('[data-zone="stock"]')?.getBoundingClientRect();
       if (stockRect) {
@@ -353,7 +368,7 @@ export function startApp(root: HTMLElement): void {
   function maybeScheduleAuto(): boolean {
     if (suppressAuto || autoTimer !== null || gesture || overlayOpen) return false;
     if (!planAutoComplete(state)) return false;
-    setStatus('Finishing the layout');
+    setStatus('Legger resten på plass');
     autoTimer = window.setTimeout(stepAuto, reduceMotion ? 0 : 420);
     return true;
   }
@@ -630,6 +645,8 @@ export function startApp(root: HTMLElement): void {
       doUndo();
     } else if (event.key === 'n' || event.key === 'N') {
       void askNewGame();
+    } else if (event.key === 'h' || event.key === 'H') {
+      showHint();
     } else if (event.key === ' ') {
       event.preventDefault();
       doDraw();
@@ -656,7 +673,7 @@ export function startApp(root: HTMLElement): void {
     persist();
     render({ dealing: true, flipped: new Set() });
     updateHud();
-    liveEl!.textContent = 'New game dealt.';
+    liveEl!.textContent = 'Nytt spill er delt ut.';
     window.setTimeout(() => {
       document.querySelectorAll('.deal').forEach((el) => el.classList.remove('deal'));
     }, 900);
@@ -686,9 +703,9 @@ export function startApp(root: HTMLElement): void {
   async function askNewGame(): Promise<void> {
     if (state.moves > 0 && !state.won) {
       const ok = await confirmDialog({
-        title: 'Deal a new game?',
-        body: 'This layout will be cleared. Games you have already finished stay in your record.',
-        confirm: 'New game',
+        title: 'Dele ut et nytt spill?',
+        body: 'Dette spillet forsvinner. Spill du allerede har fullført, blir stående i statistikken.',
+        confirm: 'Nytt spill',
       });
       if (!ok) return;
     }
@@ -698,9 +715,9 @@ export function startApp(root: HTMLElement): void {
   async function askRestart(): Promise<void> {
     if (state.moves > 0 || state.won) {
       const ok = await confirmDialog({
-        title: 'Restart this deal?',
-        body: 'The same cards go back to the opening layout. Score and time reset.',
-        confirm: 'Restart',
+        title: 'Starte denne kortgiven på nytt?',
+        body: 'De samme kortene legges tilbake slik de lå i starten. Poeng og tid nullstilles.',
+        confirm: 'Start på nytt',
       });
       if (!ok) return;
     }
@@ -711,9 +728,9 @@ export function startApp(root: HTMLElement): void {
     if (drawCount === state.drawCount) return;
     if (state.moves > 0 && !state.won) {
       const ok = await confirmDialog({
-        title: `Switch to draw ${drawCount}?`,
-        body: 'Changing the draw starts a new deal.',
-        confirm: 'Deal',
+        title: `Bytte til ${drawCount === 1 ? 'ett' : 'tre'} kort om gangen?`,
+        body: 'Når du bytter, deles det ut et nytt spill.',
+        confirm: 'Del ut',
       });
       if (!ok) {
         openMenu();
@@ -721,6 +738,43 @@ export function startApp(root: HTMLElement): void {
       }
     }
     newGame(drawCount);
+  }
+
+  function showHint(): void {
+    if (overlayOpen || state.won || gesture?.dragging) return;
+    cancelAuto();
+    clearPending();
+    clearHint();
+    const hint = findHint(state);
+    if (hint.kind === 'none') {
+      setStatus('Ingen flere trekk. Prøv Angre eller Nytt spill');
+      liveEl!.textContent = 'Ingen flere trekk.';
+      hintTimer = window.setTimeout(() => clearHint(), 2600);
+      return;
+    }
+    if (hint.kind === 'draw') {
+      document.querySelector('[data-zone="stock"]')?.classList.add('is-hint');
+      setStatus(state.stock.length ? 'Trekk fra bunken' : 'Snu kastebunken');
+      liveEl!.textContent = 'Hint: trekk fra bunken.';
+    } else {
+      const cards = movingCards(state, hint.from, hint.index) ?? [];
+      for (const card of cards) {
+        document.querySelector(`[data-card-id="${CSS.escape(card.id)}"]`)?.classList.add('is-hint');
+      }
+      document
+        .querySelector(`[data-zone="${hint.to.zone}"][data-index="${hint.to.index}"]`)
+        ?.classList.add('is-hint-target');
+      const first = cards[0];
+      liveEl!.textContent = first ? `Hint: flytt ${cardLabel(first)}.` : 'Hint vist.';
+    }
+    hintTimer = window.setTimeout(() => clearHint(), 2600);
+  }
+
+  function clearHint(): void {
+    if (hintTimer !== null) window.clearTimeout(hintTimer);
+    hintTimer = null;
+    document.querySelectorAll('.is-hint, .is-hint-target').forEach((el) => el.classList.remove('is-hint', 'is-hint-target'));
+    if (autoTimer === null) setStatus('');
   }
 
   function openMenu(): void {
@@ -735,40 +789,40 @@ export function startApp(root: HTMLElement): void {
         <div class="grabber"></div>
         <header class="sheet-head">
           <div>
-            <h2 id="menu-title">Klondike</h2>
-            <p class="sheet-sub">Deal ${dealLabel(state.seed)}</p>
+            <h2 id="menu-title">Valg</h2>
+            <p class="sheet-sub">Kabal · kortgiv ${dealLabel(state.seed)} · ${state.drawCount === 1 ? 'ett kort' : 'tre kort'}</p>
           </div>
-          <button type="button" class="icon-btn" id="close-menu" aria-label="Close menu">${closeIcon()}</button>
+          <button type="button" class="icon-btn" id="close-menu" aria-label="Lukk">${closeIcon()}</button>
         </header>
-        <button type="button" class="row" id="menu-new">New game</button>
-        <button type="button" class="row" id="menu-restart">Restart this deal</button>
-        <p class="section-label">Draw</p>
-        <div class="segment" role="group" aria-label="Draw mode">
-          <button type="button" id="draw-1" aria-pressed="${state.drawCount === 1}">One card</button>
-          <button type="button" id="draw-3" aria-pressed="${state.drawCount === 3}">Three cards</button>
+        <button type="button" class="row" id="menu-new">Nytt spill</button>
+        <button type="button" class="row" id="menu-restart">Start denne kortgiven på nytt</button>
+        <p class="section-label">Trekk fra bunken</p>
+        <div class="segment" role="group" aria-label="Antall kort per trekk">
+          <button type="button" id="draw-1" aria-pressed="${state.drawCount === 1}">Ett kort</button>
+          <button type="button" id="draw-3" aria-pressed="${state.drawCount === 3}">Tre kort</button>
         </div>
-        <p class="section-label">Appearance</p>
-        <div class="segment" role="group" aria-label="Appearance">
-          <button type="button" id="theme-felt" aria-pressed="${settings.theme === 'felt'}">Felt</button>
-          <button type="button" id="theme-night" aria-pressed="${settings.theme === 'night'}">Night</button>
+        <p class="section-label">Utseende</p>
+        <div class="segment" role="group" aria-label="Utseende">
+          <button type="button" id="theme-felt" aria-pressed="${settings.theme === 'felt'}">Lys</button>
+          <button type="button" id="theme-night" aria-pressed="${settings.theme === 'night'}">Mørk</button>
         </div>
-        <p class="section-label">On this device</p>
+        <p class="section-label">På denne enheten</p>
         <div class="stat-grid">
-          <div><span>${stats.played}</span><small>Played</small></div>
-          <div><span>${stats.won}</span><small>Won</small></div>
-          <div><span>${winRate(stats)}%</span><small>Win rate</small></div>
-          <div><span>${formatNumber(parts.total)}</span><small>This score</small></div>
-          <div><span>${best(1)}</span><small>Best · draw 1</small></div>
-          <div><span>${best(3)}</span><small>Best · draw 3</small></div>
+          <div><span>${stats.played}</span><small>Spilt</small></div>
+          <div><span>${stats.won}</span><small>Vunnet</small></div>
+          <div><span>${winRate(stats)}%</span><small>Vinnerandel</small></div>
+          <div><span>${formatNumber(parts.total)}</span><small>Poeng nå</small></div>
+          <div><span>${best(1)}</span><small>Best · ett kort</small></div>
+          <div><span>${best(3)}</span><small>Best · tre kort</small></div>
         </div>
-        <p class="section-label">How to play</p>
+        <p class="section-label">Slik spiller du</p>
         <div class="rules">
-          <p>Build each foundation up from ace to king, one suit at a time. Foundations sit on the right, in spades, hearts, diamonds, clubs.</p>
-          <p>Tableau piles build down, alternating colors. Move a face-up run together. Only a king can fill an empty column.</p>
-          <p>Tap a card to send it to the best legal pile. Double-tap to place it on its foundation. You can also drag. Tap the stock to draw. When it is empty, tap it again to turn the waste over. In draw three, three cards show and only the top one plays.</p>
-          <p>When every card is face up and the rest can be sent home, the layout finishes itself.</p>
-          <p>A foundation is worth 10. Playing from the waste, or turning a card up, is worth 5. Taking a card back down costs 15. Recycling the waste costs 20 in draw three and 100 in draw one. Two points slip away every 10 seconds. A win adds 700,000 divided by your seconds.</p>
-          <p>Undo is unlimited. Space draws, N deals, and Ctrl or Cmd Z undoes. The game is saved on this device only.</p>
+          <p>Bygg hver grunnbunke fra ess til konge, én sort om gangen. Grunnbunkene ligger øverst til høyre: spar, hjerter, ruter, kløver.</p>
+          <p>På bordet bygger du nedover med annenhver farge. En rad med åpne kort kan flyttes samlet. Bare en konge kan legges i en tom kolonne.</p>
+          <p>Trykk på et kort for å sende det til beste lovlige plass. Dobbelttrykk for å legge det på grunnbunken. Du kan også dra kortene. Trykk på bunken for å trekke. Når den er tom, trykker du igjen for å snu kastebunken. Med tre kort vises tre, men bare det øverste kan spilles.</p>
+          <p>Hint viser ett lovlig trekk. Når alle kort ligger åpne og resten kan legges opp, fullfører spillet seg selv.</p>
+          <p>Et kort på grunnbunken gir 10 poeng. Å spille fra kastebunken eller snu et kort gir 5. Å ta et kort ned fra grunnbunken koster 15. Å snu kastebunken koster 20 med tre kort og 100 med ett kort. To poeng forsvinner hvert tiende sekund. En seier gir 700 000 delt på antall sekunder i bonus.</p>
+          <p>Angre er ubegrenset. Mellomrom trekker, N deler ut nytt spill og Ctrl eller Cmd Z angrer. Spillet lagres bare på denne enheten.</p>
         </div>
       </div>
     `);
@@ -805,28 +859,28 @@ export function startApp(root: HTMLElement): void {
   function openWin(): void {
     if (winDismissed || !state.won || document.querySelector('.win-dialog')) return;
     const parts = scoreParts(state.score, elapsedMs, true);
-    const suits = SUITS.map((suit) => suitSvg(suit, 28, suit === 'h' || suit === 'd' ? '#c5162c' : '#1c1917')).join('');
+    const suits = SUITS.map((suit) => suitSvg(suit, 28, suit === 'h' || suit === 'd' ? '#ff3b30' : '#1c1c1e')).join('');
     showOverlay(`
       <div class="modal win-dialog" role="dialog" aria-modal="true" aria-labelledby="win-title">
-        <p class="eyebrow">Klondike</p>
-        <h2 id="win-title">Well played</h2>
-        <p class="modal-copy">All fifty-two cards are home.</p>
+        <p class="eyebrow">Kabal</p>
+        <h2 id="win-title">Godt spilt!</h2>
+        <p class="modal-copy">Alle 52 kortene er lagt opp.</p>
         <div class="suit-row">${suits}</div>
         <p class="win-time">${formatTime(elapsedMs)}</p>
         <p class="win-score">${formatNumber(parts.total)}</p>
         <dl class="breakdown">
-          <div><dt>Play</dt><dd>${formatNumber(parts.play)}</dd></div>
-          <div><dt>Time</dt><dd>−${formatNumber(parts.timePenalty)}</dd></div>
+          <div><dt>Spill</dt><dd>${formatNumber(parts.play)}</dd></div>
+          <div><dt>Tid</dt><dd>−${formatNumber(parts.timePenalty)}</dd></div>
           <div><dt>Bonus</dt><dd>${formatNumber(parts.bonus)}</dd></div>
         </dl>
         <div class="modal-actions">
-          <button type="button" class="btn primary" id="win-new">New game</button>
-          <button type="button" class="btn ghost" id="win-close">Keep the board</button>
+          <button type="button" class="btn primary" id="win-new">Nytt spill</button>
+          <button type="button" class="btn ghost" id="win-close">Behold bordet</button>
         </div>
       </div>
     `, true);
     burst();
-    liveEl!.textContent = 'You won.';
+    liveEl!.textContent = 'Du vant.';
     bind('win-new', () => {
       winDismissed = true;
       closeOverlay();
@@ -848,7 +902,7 @@ export function startApp(root: HTMLElement): void {
           <p class="modal-copy">${copy.body}</p>
           <div class="modal-actions">
             <button type="button" class="btn primary" id="confirm-ok">${copy.confirm}</button>
-            <button type="button" class="btn ghost" id="confirm-cancel">Cancel</button>
+            <button type="button" class="btn ghost" id="confirm-cancel">Avbryt</button>
           </div>
         </div>
       `, true);
@@ -904,7 +958,7 @@ export function startApp(root: HTMLElement): void {
     });
     if (!show) return;
     hintEl!.hidden = false;
-    hintEl!.innerHTML = `<p>To play full screen, tap Share, then Add to Home Screen.</p><button type="button" id="dismiss-hint" aria-label="Dismiss">×</button>`;
+    hintEl!.innerHTML = `<p>For fullskjerm: trykk Del, og så Legg til på Hjem-skjerm.</p><button type="button" id="dismiss-hint" aria-label="Lukk">×</button>`;
     document.getElementById('dismiss-hint')?.addEventListener('click', () => {
       settings = { ...settings, installHintDismissed: true };
       saveSettings(settings);
@@ -915,7 +969,7 @@ export function startApp(root: HTMLElement): void {
 
 function applyTheme(theme: 'felt' | 'night'): void {
   document.documentElement.dataset.theme = theme;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'night' ? '#101714' : '#0c4e2b');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'night' ? '#0b0d1a' : '#5b9cf6');
 }
 
 function readZone(el: HTMLElement): PileRef | null {
@@ -954,7 +1008,7 @@ function burst(): void {
   const paint = context;
   canvas.width = window.innerWidth * dpr;
   canvas.height = window.innerHeight * dpr;
-  const colors = ['#e7d3a1', '#f7f1e4', '#c5162c', '#7a1f34', '#1c1917', '#ffffff'];
+  const colors = ['#7dd3fc', '#a78bfa', '#34d399', '#f472b6', '#ffffff', '#6366f1'];
   const pieces = Array.from({ length: 64 }, () => ({
     x: canvas.width * (0.15 + Math.random() * 0.7),
     y: -Math.random() * canvas.height * 0.4,

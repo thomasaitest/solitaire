@@ -1,20 +1,20 @@
 import { RANK_LABEL, SUIT_NAME } from '../game/types.ts';
 import type { Card, Suit } from '../game/types.ts';
 
-const RED = '#c5162c';
-const BLACK = '#1c1917';
+const RED = '#ff3b30';
+const BLACK = '#1c1c1e';
 
 export function cardColor(suit: Suit): string {
   return suit === 'h' || suit === 'd' ? RED : BLACK;
 }
 
 export function cardLabel(card: Card): string {
-  if (!card.faceUp) return 'Face-down card';
-  return `${RANK_NAME(card.rank)} of ${SUIT_NAME[card.suit]}`;
+  if (!card.faceUp) return 'Kort med baksiden opp';
+  return `${SUIT_NAME[card.suit]} ${RANK_NAME(card.rank)}`;
 }
 
 function RANK_NAME(rank: number): string {
-  return ['', 'Ace', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'Jack', 'Queen', 'King'][rank] ?? String(rank);
+  return ['', 'ess', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'knekt', 'dame', 'konge'][rank] ?? String(rank);
 }
 
 function suitPaths(suit: Suit): string {
@@ -34,74 +34,47 @@ export function suitSvg(suit: Suit, size: number, color = 'currentColor'): strin
   return `<svg class="suit" width="${size}" height="${size}" viewBox="0 0 100 100" aria-hidden="true" fill="${color}">${suitPaths(suit)}</svg>`;
 }
 
-function pip(suit: Suit, x: number, y: number, size: number, invert: boolean, color: string): string {
+const FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'Segoe UI', Roboto, sans-serif";
+
+function glyph(suit: Suit, x: number, y: number, size: number, color: string): string {
   const scale = size / 100;
-  const turn = invert ? ' rotate(180)' : '';
-  return `<g transform="translate(${x} ${y})${turn} scale(${scale})" fill="${color}"><g transform="translate(-50 -50)">${suitPaths(suit)}</g></g>`;
+  return `<g transform="translate(${x} ${y}) scale(${scale})" fill="${color}">${suitPaths(suit)}</g>`;
 }
 
-const PIPS: Record<number, Array<[number, number, boolean]>> = {
-  1: [[120, 188, false]],
-  2: [[120, 132, false], [120, 236, true]],
-  3: [[120, 124, false], [120, 184, false], [120, 244, true]],
-  4: [[76, 128, false], [164, 128, false], [76, 236, true], [164, 236, true]],
-  5: [[76, 124, false], [164, 124, false], [120, 184, false], [76, 244, true], [164, 244, true]],
-  6: [[76, 118, false], [164, 118, false], [76, 184, false], [164, 184, false], [76, 250, true], [164, 250, true]],
-  7: [[76, 114, false], [164, 114, false], [120, 150, false], [76, 186, false], [164, 186, false], [76, 252, true], [164, 252, true]],
-  8: [[76, 112, false], [164, 112, false], [120, 146, false], [76, 178, false], [164, 178, false], [120, 220, true], [76, 252, true], [164, 252, true]],
-  9: [[76, 110, false], [164, 110, false], [76, 148, false], [164, 148, false], [120, 184, false], [76, 220, true], [164, 220, true], [76, 256, true], [164, 256, true]],
-  10: [[76, 108, false], [164, 108, false], [120, 132, false], [76, 154, false], [164, 154, false], [76, 210, true], [164, 210, true], [120, 232, true], [76, 256, true], [164, 256, true]],
-};
-
+/** Top-left index: rank and a small suit side by side, inside the part a fanned card shows. */
 function corner(rank: string, suit: Suit, color: string): string {
   const wide = rank.length > 1;
-  const font = wide ? 52 : 66;
-  const suitAt = wide ? 112 : 92;
+  const x = wide ? 14 : 20;
+  const textW = wide ? 82 : 48;
   return `
-    <text x="16" y="62" fill="${color}" font-size="${font}" font-family="Georgia, 'Iowan Old Style', Palatino, 'Times New Roman', serif" font-weight="700">${rank}</text>
-    ${pip(suit, suitAt, 40, 34, false, color)}
+    <text x="${x}" y="84" fill="${color}" font-size="78" font-family="${FONT}" font-weight="600" letter-spacing="${wide ? -6 : -2}">${rank}</text>
+    ${glyph(suit, x + textW + 4, 34, 54, color)}
   `;
 }
 
-function faceArt(rank: string, suit: Suit, color: string): string {
-  return `
-    <rect x="58" y="112" width="124" height="124" rx="14" fill="none" stroke="${color}" stroke-width="2.4"/>
-    <rect x="68" y="122" width="104" height="104" rx="8" fill="none" stroke="${color}" stroke-width="1" opacity="0.55"/>
-    <text x="120" y="186" text-anchor="middle" fill="${color}" font-size="72" font-family="Georgia, 'Iowan Old Style', Palatino, serif">${rank}</text>
-    <g transform="translate(120 214)">${pip(suit, 0, 0, 34, false, color)}</g>
-  `;
-}
-
-function pipsFor(card: Card, color: string): string {
-  const spots = PIPS[card.rank] ?? [];
-  const size = card.rank === 1 ? 108 : card.rank >= 9 ? 26 : card.rank >= 7 ? 30 : 34;
-  return spots.map(([x, y, invert]) => pip(card.suit, x, y, size, invert && card.rank !== 1, color)).join('');
+function center(card: Card, rank: string, color: string): string {
+  if (card.rank >= 11) {
+    return `
+      <text x="146" y="262" text-anchor="middle" fill="${color}" font-size="132" font-family="${FONT}" font-weight="700" opacity="0.92">${rank}</text>
+      ${glyph(card.suit, 122, 272, 48, color)}
+    `;
+  }
+  const size = card.rank === 1 ? 150 : 124;
+  return glyph(card.suit, 150 - size / 2 + 2, 196 - size / 2 + 10, size, color);
 }
 
 export function cardFaceSvg(card: Card): string {
   const color = cardColor(card.suit);
   const rank = RANK_LABEL[card.rank] ?? String(card.rank);
-  const center = card.rank >= 11 ? faceArt(rank, card.suit, color) : pipsFor(card, color);
-  const index = corner(rank, card.suit, color);
   return `<svg class="card-svg" viewBox="0 0 240 336" width="100%" height="100%" aria-hidden="true">
-    ${index}
-    <g transform="rotate(180 120 168)">${index}</g>
-    ${center}
+    ${corner(rank, card.suit, color)}
+    ${center(card, rank, color)}
   </svg>`;
 }
 
+/** The back is painted in CSS (gradient and gloss), so it needs no SVG ids. */
 export function cardBackSvg(): string {
-  return `<svg class="card-svg" viewBox="0 0 240 336" width="100%" height="100%" aria-hidden="true">
-    <rect width="240" height="336" fill="#7a1f34"/>
-    <rect x="11" y="11" width="218" height="314" rx="16" fill="#64182c" stroke="#e6d3a1" stroke-width="2.5"/>
-    <rect x="20" y="20" width="200" height="296" rx="12" fill="none" stroke="#e6d3a1" stroke-width="1" opacity="0.8"/>
-    <path d="M120 118L156 168L120 218L84 168Z" fill="none" stroke="#e6d3a1" stroke-width="2"/>
-    <path d="M120 136L144 168L120 200L96 168Z" fill="#e6d3a1"/>
-    <circle cx="36" cy="36" r="3.2" fill="#e6d3a1"/>
-    <circle cx="204" cy="36" r="3.2" fill="#e6d3a1"/>
-    <circle cx="36" cy="300" r="3.2" fill="#e6d3a1"/>
-    <circle cx="204" cy="300" r="3.2" fill="#e6d3a1"/>
-  </svg>`;
+  return '<span class="card-back-art" aria-hidden="true"></span>';
 }
 
 export function recycleSvg(): string {

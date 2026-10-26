@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeLayout } from './layout.ts';
+import { MIN_UP_PEEK, computeLayout } from './layout.ts';
 
 const empty = Array.from({ length: 7 }, () => []);
 
@@ -32,5 +32,16 @@ describe('computeLayout', () => {
     const stack = layout.cardH + 12 * layout.upPeek;
     expect(stack).toBeLessThanOrEqual(tableauH + 1);
     expect(layout.tableW).toBeLessThanOrEqual(900);
+  });
+
+  it('keeps the corner index readable on a landscape phone', () => {
+    const run = Array.from({ length: 7 }, (_, index) => [
+      ...Array.from({ length: index }, () => ({ faceUp: false })),
+      ...Array.from({ length: 4 }, () => ({ faceUp: true })),
+    ]);
+    const layout = computeLayout(844, 300, run, 3);
+    expect(layout.upPeek).toBeGreaterThanOrEqual(Math.ceil(layout.cardH * MIN_UP_PEEK));
+    const tallest = layout.cardH + 6 * layout.downPeek + 3 * layout.upPeek;
+    expect(tallest).toBeLessThanOrEqual(300 - layout.cardH - layout.gap + 1);
   });
 });

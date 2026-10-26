@@ -31,16 +31,16 @@ export default defineConfig(({ mode }) => {
         includeAssets: ['favicon.svg', 'icons/*.png'],
         manifest: {
           id: './',
-          name: 'Klondike Solitaire',
-          short_name: 'Solitaire',
-          description: 'Classic Klondike solitaire. No ads, no accounts, plays offline.',
+          name: 'Kabal – Klondike',
+          short_name: 'Kabal',
+          description: 'Klassisk kabal (Klondike). Ingen reklame, ingen konto, virker uten nett.',
           start_url: './',
           scope: './',
           display: 'standalone',
           orientation: 'any',
-          background_color: '#146b3c',
-          theme_color: '#0c4e2b',
-          lang: 'en',
+          background_color: '#4f86f7',
+          theme_color: '#5b9cf6',
+          lang: 'nb',
           categories: ['games'],
           icons: [
             {

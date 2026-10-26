@@ -1,22 +1,22 @@
 <!doctype html>
-<html lang="en">
+<html lang="nb">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
-    <meta name="theme-color" content="#0c4e2b" />
+    <meta name="theme-color" content="#5b9cf6" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="description" content="Classic Klondike solitaire. No ads, no accounts, plays offline." />
+    <meta name="description" content="Klassisk kabal (Klondike). Ingen reklame, ingen konto, virker uten nett." />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Solitaire" />
+    <meta name="apple-mobile-web-app-title" content="Kabal" />
     <meta name="format-detection" content="telephone=no" />
-    <title>Klondike Solitaire</title>
+    <title>Kabal</title>
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
     <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png" />
     <style>
-      html, body { margin: 0; height: 100%; background: #146b3c; }
-      html[data-theme="night"], html[data-theme="night"] body { background: #17211c; }
+      html, body { margin: 0; height: 100%; background: #4f86f7; }
+      html[data-theme="night"], html[data-theme="night"] body { background: #0b0d1a; }
     </style>
     <script>
       try {
@@ -26,49 +26,67 @@
           : (matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'felt');
         document.documentElement.dataset.theme = theme;
         var meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.setAttribute('content', theme === 'night' ? '#101714' : '#0c4e2b');
+        if (meta) meta.setAttribute('content', theme === 'night' ? '#0b0d1a' : '#5b9cf6');
       } catch (e) {}
     </script>
   </head>
   <body>
     <div id="app" class="app">
       <div class="stage">
-        <header class="hud" id="hud">
-          <button type="button" class="icon-btn" id="menu-btn" aria-label="Open menu">
+        <header class="hud glass" id="hud">
+          <button type="button" class="icon-btn" id="menu-btn" aria-label="Åpne meny">
             <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
               <path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
             </svg>
           </button>
-          <div class="hud-stats" role="group" aria-label="Game status">
+          <div class="hud-stats" role="group" aria-label="Spillstatus">
             <div class="stat">
               <span class="stat-value" id="score">0</span>
-              <span class="stat-label">Score</span>
-            </div>
-            <div class="stat">
-              <span class="stat-value" id="moves">0</span>
-              <span class="stat-label">Moves</span>
+              <span class="stat-label">Poeng</span>
             </div>
             <div class="stat">
               <span class="stat-value" id="time">0:00</span>
-              <span class="stat-label" id="mode-label">Draw 3</span>
+              <span class="stat-label">Tid</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value" id="moves">0</span>
+              <span class="stat-label">Trekk</span>
             </div>
           </div>
-          <button type="button" class="icon-btn" id="undo-btn" aria-label="Undo" disabled>
+          <button type="button" class="icon-btn" id="restart-btn" aria-label="Start denne kortgiven på nytt">
             <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-              <path d="M8 8H4.5V4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M5 9.5a7.5 7.5 0 1 1 1.4 5.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="M19 4.5V8h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
         </header>
         <p id="status" class="status" aria-live="polite"></p>
-        <main id="table" class="table" aria-label="Solitaire table"></main>
+        <main id="table" class="table" aria-label="Kortbordet"></main>
+        <nav class="dock glass" id="dock" aria-label="Handlinger">
+          <button type="button" class="dock-btn is-primary" id="new-btn">
+            <span class="dock-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3.5" width="12" height="16" rx="2"/><path d="M8 7.5h12v13H8" opacity=".55"/><path d="M10 11.5h4M12 9.5v4"/></svg></span>
+            <span class="dock-label">Nytt spill</span>
+          </button>
+          <button type="button" class="dock-btn" id="undo-btn" disabled>
+            <span class="dock-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8H4.5V4.5"/><path d="M5 9.5a7.5 7.5 0 1 1 1.4 5.2"/></svg></span>
+            <span class="dock-label">Angre</span>
+          </button>
+          <button type="button" class="dock-btn" id="hint-btn">
+            <span class="dock-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg></span>
+            <span class="dock-label">Hint</span>
+          </button>
+          <button type="button" class="dock-btn" id="settings-btn">
+            <span class="dock-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg></span>
+            <span class="dock-label">Valg</span>
+          </button>
+        </nav>
       </div>
     </div>
     <div id="hint" class="hint" hidden></div>
     <div id="overlay" class="overlay" hidden></div>
     <div id="drag-layer"></div>
     <p id="live" class="sr-only" aria-live="polite"></p>
-    <noscript><p class="noscript">Klondike needs JavaScript to deal the cards. Nothing here phones home.</p></noscript>
+    <noscript><p class="noscript">Kabalen trenger JavaScript for å dele ut kortene. Ingenting sendes noe sted.</p></noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

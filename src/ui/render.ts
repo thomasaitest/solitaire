@@ -25,9 +25,9 @@ export function renderTable(table: HTMLElement, state: GameState, layout: Layout
   let dealOrder = 0;
 
   const stockInner = state.stock.length
-    ? `<button type="button" class="card back" id="stock-btn" aria-label="Draw from the stock, ${state.stock.length} remaining" draggable="false">${cardBackSvg()}<span class="count">${state.stock.length}</span></button>`
+    ? `<button type="button" class="card back" id="stock-btn" aria-label="Trekk fra bunken, ${state.stock.length} igjen" draggable="false">${cardBackSvg()}<span class="count">${state.stock.length}</span></button>`
     : state.waste.length
-      ? `<button type="button" class="slot recycle" id="stock-btn" aria-label="Turn the waste into the stock">${recycleSvg()}</button>`
+      ? `<button type="button" class="slot recycle" id="stock-btn" aria-label="Snu kastebunken til ny trekkbunke">${recycleSvg()}</button>`
       : `<div class="slot" id="stock-btn" aria-hidden="true"></div>`;
 
   const fanCount = state.drawCount === 1 ? 1 : 3;
@@ -54,8 +54,8 @@ export function renderTable(table: HTMLElement, state: GameState, layout: Layout
     const card = top
       ? cardButton(top, pile.length - 1, '', '', '')
       : '';
-    const name = suit === 's' ? 'spades' : suit === 'h' ? 'hearts' : suit === 'd' ? 'diamonds' : 'clubs';
-    return `<div class="foundation${top ? ' has-card' : ''}" data-zone="foundation" data-index="${index}" aria-label="${top ? '' : `Empty ${name} foundation`}">
+    const name = suit === 's' ? 'spar' : suit === 'h' ? 'hjerter' : suit === 'd' ? 'ruter' : 'kløver';
+    return `<div class="foundation${top ? ' has-card' : ''}" data-zone="foundation" data-index="${index}" aria-label="${top ? '' : `Tom grunnbunke for ${name}`}">
       <div class="slot" aria-hidden="true"><span class="watermark">${suitSvg(suit, Math.round(layout.cardW * 0.42))}</span></div>
       ${card}
     </div>`;

@@ -16,6 +16,8 @@ export interface Layout {
 const RATIO = 1.42;
 const MAX_CARD = 118;
 const MIN_CARD = 28;
+/** Share of the card height a covered face-up card shows; the corner index ends at about 25%. */
+export const MIN_UP_PEEK = 0.27;
 
 function wasteFan(cardW: number, gap: number, drawCount: 1 | 3): number {
   if (drawCount === 1) return 0;
@@ -57,9 +59,11 @@ function measure(
 
   const tallest = (): number => tableau.reduce((max, pile) => Math.max(max, stackHeight(pile)), cardH);
 
+  // A covered face-up card must still show its whole corner index (rank and suit).
+  const minUp = Math.max(13, Math.ceil(cardH * MIN_UP_PEEK));
   for (let i = 0; i < 40 && tallest() > tableauH; i++) {
-    if (upPeek <= 13 && downPeek <= 6) break;
-    upPeek = Math.max(13, upPeek - 1);
+    if (upPeek <= minUp && downPeek <= 6) break;
+    upPeek = Math.max(minUp, upPeek - 1);
     downPeek = Math.max(6, downPeek - 1);
   }
 
