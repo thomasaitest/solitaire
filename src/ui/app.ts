@@ -4,7 +4,6 @@ import {
   buildPosition,
   createGame,
   draw,
-  findBestMove,
   findFoundationMove,
   legalTargets,
   makeCard,
@@ -17,8 +16,9 @@ import {
 } from '../game/engine.ts';
 import type { GameState, PileRef } from '../game/types.ts';
 import { SUITS } from '../game/types.ts';
-import { applySafeAutoMove, findSafeAutoMove } from '../game/autoplay.ts';
-import { findHint } from '../game/hint.ts';
+import { findHint, stateKey } from '../game/hint.ts';
+import { chargePenalty } from '../game/penalty.ts';
+import { tapTarget } from '../game/smartTap.ts';
 import { loadGame, loadSettings, loadStats, saveGame, saveSettings, saveStats } from '../storage.ts';
 import { Capacitor } from '@capacitor/core';
 import { cardLabel, suitSvg } from './cards.ts';
@@ -45,7 +45,7 @@ interface PendingTap {
   timer: number;
 }
 
-type ActionKind = 'move' | 'draw' | 'undo' | 'auto' | 'safe';
+type ActionKind = 'move' | 'draw' | 'undo' | 'auto';
 
 export function startApp(root: HTMLElement): void {
   const table = document.getElementById('table');
@@ -88,7 +88,6 @@ export function startApp(root: HTMLElement): void {
   let overlayOpen = false;
   let confirmResolve: ((value: boolean) => void) | null = null;
   let autoTimer: number | null = null;
-  let safeTimer: number | null = null;
   let suppressAuto = false;
   let winDismissed = false;
   let lastMovedId = '';
@@ -97,13 +96,16 @@ export function startApp(root: HTMLElement): void {
   let lastSize = '';
   let lastPersist = elapsedMs;
   let hintTimer: number | null = null;
+  /** Positions visited in this deal, so Hint does not send the player back and forth. */
+  const seen = new Set<string>();
 
+  seen.add(stateKey(state));
   applyTheme(settings.theme);
   showInstallHint();
   render({ dealing: !preview, flipped: new Set() });
   updateHud();
   if (state.won) openWin();
-  else if (!maybeScheduleAuto()) maybeScheduleSafe();
+  else maybeScheduleAuto();
 
   const resize = new ResizeObserver(() => {
     const key = `${root.clientWidth}x${root.clientHeight}`;
@@ -305,6 +307,7 @@ export function startApp(root: HTMLElement): void {
     }
     const flipped = revealed(prev, next);
     state = next;
+    seen.add(stateKey(next));
     syncStats(prev, next, kind);
     persist();
     render({ dealing: false, flipped });
@@ -316,7 +319,7 @@ export function startApp(root: HTMLElement): void {
     }
     if (kind === 'move' || kind === 'draw') suppressAuto = false;
     if (kind !== 'auto' && kind !== 'undo' && !suppressAuto) {
-      const scheduled = maybeScheduleAuto() || maybeScheduleSafe();
+      const scheduled = maybeScheduleAuto();
       if (!scheduled && next.won && !prev.won) openWin();
     }
   }
@@ -363,7 +366,10 @@ export function startApp(root: HTMLElement): void {
     const result = undo({ ...state, elapsedMs });
     if (!result.ok) return;
     winDismissed = false;
-    applyResult(prev, result.state, rects, 'undo');
+    // The previous position comes back first; the penalty is charged on top of it.
+    const charge = chargePenalty(result.state, elapsedMs);
+    applyResult(prev, charge.state, rects, 'undo');
+    if (charge.charged > 0) showPenalty(charge.charged);
     if (!result.state.won) closeOverlay();
   }
 
@@ -399,35 +405,9 @@ export function startApp(root: HTMLElement): void {
     autoTimer = window.setTimeout(stepAuto, reduceMotion ? 0 : 150);
   }
 
-  /**
-   * Safe auto-play to the foundations (see game/autoplay.ts). Runs one card at a
-   * time after a move, draw or deal, and never while a gesture or sheet is open.
-   */
-  function maybeScheduleSafe(): boolean {
-    if (!settings.autoFoundation || suppressAuto || safeTimer !== null || autoTimer !== null) return false;
-    if (gesture || overlayOpen || state.won) return false;
-    if (!findSafeAutoMove(state)) return false;
-    safeTimer = window.setTimeout(stepSafe, reduceMotion ? 0 : 260);
-    return true;
-  }
-
-  function stepSafe(): void {
-    safeTimer = null;
-    if (gesture || overlayOpen || !settings.autoFoundation || suppressAuto || autoTimer !== null) return;
-    const move = findSafeAutoMove(state);
-    if (!move) return;
-    const prev = state;
-    const rects = captureRects();
-    const next = applySafeAutoMove({ ...state, elapsedMs }, move);
-    if (!next) return;
-    applyResult(prev, next, rects, 'safe');
-  }
-
   function cancelAuto(): void {
     if (autoTimer !== null) window.clearTimeout(autoTimer);
     autoTimer = null;
-    if (safeTimer !== null) window.clearTimeout(safeTimer);
-    safeTimer = null;
     setStatus('');
   }
 
@@ -443,7 +423,7 @@ export function startApp(root: HTMLElement): void {
     clearPending();
     const still = movingCards(state, pending.from, pending.index);
     if (!still || still[0]?.id !== pending.id) return;
-    const best = findBestMove(state, pending.from, pending.index);
+    const best = tapTarget(state, pending.from, pending.index, settings.smartTap);
     if (best) doMove(pending.from, pending.index, best);
   }
 
@@ -456,7 +436,7 @@ export function startApp(root: HTMLElement): void {
     }
     const now = performance.now();
     const foundation = findFoundationMove(state, from, index);
-    const best = findBestMove(state, from, index);
+    const best = tapTarget(state, from, index, settings.smartTap);
 
     if (pendingTap && pendingTap.id === id && now - pendingTap.at < 340) {
       clearPending();
@@ -489,7 +469,7 @@ export function startApp(root: HTMLElement): void {
         if (!pending) return;
         const still = movingCards(state, pending.from, pending.index);
         if (!still || still[0]?.id !== pending.id) return;
-        const next = findBestMove(state, pending.from, pending.index);
+        const next = tapTarget(state, pending.from, pending.index, settings.smartTap);
         if (next) doMove(pending.from, pending.index, next);
       }, 240),
     };
@@ -576,10 +556,7 @@ export function startApp(root: HTMLElement): void {
       else finishDrag(current, event.clientX, event.clientY);
       return;
     }
-    if (cancelled) {
-      maybeScheduleSafe();
-      return;
-    }
+    if (cancelled) return;
     if (current.kind === 'stock') {
       if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) < 12) doDraw();
       return;
@@ -640,10 +617,7 @@ export function startApp(root: HTMLElement): void {
     }
     layer.style.transition = 'transform 160ms ease';
     layer.style.transform = 'translate(0px, 0px)';
-    window.setTimeout(() => {
-      clearDrag();
-      maybeScheduleSafe();
-    }, 170);
+    window.setTimeout(() => clearDrag(), 170);
   }
 
   function clearDrag(): void {
@@ -700,6 +674,8 @@ export function startApp(root: HTMLElement): void {
     settings = { ...settings, drawCount };
     saveSettings(settings);
     state = createGame({ drawCount });
+    seen.clear();
+    seen.add(stateKey(state));
     elapsedMs = 0;
     winDismissed = false;
     suppressAuto = false;
@@ -708,7 +684,6 @@ export function startApp(root: HTMLElement): void {
     render({ dealing: true, flipped: new Set() });
     updateHud();
     liveEl!.textContent = 'Nytt spill er delt ut.';
-    maybeScheduleSafe();
     window.setTimeout(() => {
       document.querySelectorAll('.deal').forEach((el) => el.classList.remove('deal'));
     }, 900);
@@ -723,14 +698,15 @@ export function startApp(root: HTMLElement): void {
       rememberStats();
     }
     state = restartDeal({ ...state, elapsedMs });
+    seen.clear();
+    seen.add(stateKey(state));
     elapsedMs = 0;
     winDismissed = false;
-    suppressAuto = false;
+    suppressAuto = true;
     hudCache = '';
     persist();
     render({ dealing: true, flipped: new Set() });
     updateHud();
-    maybeScheduleSafe();
     window.setTimeout(() => {
       document.querySelectorAll('.deal').forEach((el) => el.classList.remove('deal'));
     }, 900);
@@ -780,18 +756,35 @@ export function startApp(root: HTMLElement): void {
     if (overlayOpen || state.won || gesture?.dragging) return;
     cancelAuto();
     clearPending();
+    const alreadyShowing = hintTimer !== null;
     clearHint();
-    const hint = findHint(state);
+    const hint = findHint(state, seen);
     if (hint.kind === 'none') {
-      setStatus('Ingen flere trekk. Prøv Angre eller Nytt spill');
       liveEl!.textContent = 'Ingen flere trekk.';
-      hintTimer = window.setTimeout(() => clearHint(), 2600);
+      openNoMoves();
       return;
+    }
+    // A hint costs points, but asking again for the one on screen does not.
+    if (!alreadyShowing) {
+      const charge = chargePenalty(state, elapsedMs);
+      if (charge.charged > 0) {
+        state = charge.state;
+        persist();
+        updateHud();
+        showPenalty(charge.charged);
+      }
     }
     if (hint.kind === 'draw') {
       document.querySelector('[data-zone="stock"]')?.classList.add('is-hint');
-      setStatus(state.stock.length ? 'Trekk fra bunken' : 'Snu kastebunken');
-      liveEl!.textContent = 'Hint: trekk fra bunken.';
+      const cardName = hint.card ? cardLabel(hint.card) : '';
+      const times = hint.draws > 1 ? ` (${hint.draws} trekk)` : '';
+      const text = hint.recycle
+        ? `Snu bunken på nytt${cardName ? `: ${cardName} blir spillbar` : ''}`
+        : cardName
+          ? `Trekk fra bunken: ${cardName} blir spillbar${times}`
+          : 'Trekk fra bunken';
+      setStatus(text);
+      liveEl!.textContent = `Hint: ${text}.`;
     } else {
       const cards = movingCards(state, hint.from, hint.index) ?? [];
       for (const card of cards) {
@@ -803,7 +796,36 @@ export function startApp(root: HTMLElement): void {
       const first = cards[0];
       liveEl!.textContent = first ? `Hint: flytt ${cardLabel(first)}.` : 'Hint vist.';
     }
-    hintTimer = window.setTimeout(() => clearHint(), 2600);
+    hintTimer = window.setTimeout(() => clearHint(), 3200);
+  }
+
+  function showPenalty(points: number): void {
+    const host = scoreEl!.parentElement;
+    if (!host) return;
+    const pop = document.createElement('span');
+    pop.className = 'penalty-pop';
+    pop.textContent = `-${points}`;
+    host.appendChild(pop);
+    window.setTimeout(() => pop.remove(), 1000);
+  }
+
+  function openNoMoves(): void {
+    showOverlay(`
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="nomoves-title">
+        <h2 id="nomoves-title">Ingen flere trekk</h2>
+        <p class="modal-copy">Jeg finner ingen flere nyttige trekk, heller ikke etter å ha bladd gjennom hele bunken. Prøv Angre, eller start et nytt spill.</p>
+        <div class="modal-actions">
+          <button type="button" class="btn primary" id="nomoves-new">Nytt spill</button>
+          <button type="button" class="btn ghost" id="nomoves-close">Lukk</button>
+        </div>
+      </div>
+    `, true);
+    bind('nomoves-new', () => {
+      closeOverlay();
+      newGame(settings.drawCount);
+    });
+    bind('nomoves-close', () => closeOverlay());
+    document.getElementById('nomoves-new')?.focus();
   }
 
   function clearHint(): void {
@@ -838,8 +860,8 @@ export function startApp(root: HTMLElement): void {
           <button type="button" id="draw-3" aria-pressed="${state.drawCount === 3}">Tre kort</button>
         </div>
         <p class="section-label">Spill</p>
-        <button type="button" class="row switch-row" id="auto-foundation" role="switch" aria-checked="${settings.autoFoundation}">
-          <span class="switch-text">Flytt kort opp automatisk<small>Ess og trygge kort går opp av seg selv</small></span>
+        <button type="button" class="row switch-row" id="smart-tap" role="switch" aria-checked="${settings.smartTap}">
+          <span class="switch-text">Smart trykk: send trygge kort opp<small>Trykk på et trygt kort sender det til grunnbunken</small></span>
           <span class="switch" aria-hidden="true"></span>
         </button>
         <p class="section-label">Utseende</p>
@@ -860,9 +882,8 @@ export function startApp(root: HTMLElement): void {
         <div class="rules">
           <p>Bygg hver grunnbunke fra ess til konge, én sort om gangen. Grunnbunkene ligger øverst til høyre: spar, hjerter, ruter, kløver.</p>
           <p>På bordet bygger du nedover med annenhver farge. En rad med åpne kort kan flyttes samlet. Bare en konge kan legges i en tom kolonne.</p>
-          <p>Trykk på et kort for å sende det til beste lovlige plass. Dobbelttrykk for å legge det på grunnbunken. Du kan også dra kortene. Trykk på bunken for å trekke. Når den er tom, trykker du igjen for å snu kastebunken. Med tre kort vises tre, men bare det øverste kan spilles.</p>
-          <p>Med «Flytt kort opp automatisk» går ess og to-ere opp av seg selv, og andre kort når begge kortene med motsatt farge og én lavere verdi allerede ligger på grunnbunkene. Ett Angre tar tilbake trekket ditt og alt som fulgte automatisk etter.</p>
-          <p>Hint viser ett lovlig trekk. Når alle kort ligger åpne og resten kan legges opp, fullfører spillet seg selv.</p>
+          <p>Trykk på et kort for å flytte det. Med «Smart trykk» på sender trykket trygge kort rett til grunnbunken: ess og to-ere, og andre kort når begge kortene med motsatt farge og én lavere verdi allerede ligger der. Ellers går kortet til beste lovlige plass på bordet, og til grunnbunken hvis det ikke finnes noe annet. Ingenting flyttes av seg selv. Dobbelttrykk legger et kort på grunnbunken. Du kan også dra kortene. Trykk på bunken for å trekke. Når den er tom, trykker du igjen for å snu kastebunken. Med tre kort vises tre, men bare det øverste kan spilles.</p>
+          <p>Hint ser på hele bordet og bunken og viser et nyttig trekk: å åpne et skjult kort, spille til grunnbunken eller tømme en kolonne. Hvis neste fremgang ligger i bunken, peker det på den og sier hvilket kort som blir spillbart. Når det ikke finnes flere trekk, får du beskjed. Hint og Angre koster 5 poeng hver (aldri under 0). Når alle kort ligger åpne og resten kan legges opp, fullfører spillet seg selv.</p>
           <p>Et kort på grunnbunken gir 10 poeng. Å spille fra kastebunken eller snu et kort gir 5. Å ta et kort ned fra grunnbunken koster 15. Å snu kastebunken koster 20 med tre kort og 100 med ett kort. To poeng forsvinner hvert tiende sekund. En seier gir 700 000 delt på antall sekunder i bonus.</p>
           <p>Angre er ubegrenset. Mellomrom trekker, N deler ut nytt spill og Ctrl eller Cmd Z angrer. Spillet lagres bare på denne enheten.</p>
         </div>
@@ -885,10 +906,10 @@ export function startApp(root: HTMLElement): void {
       closeOverlay();
       void changeDraw(3);
     });
-    bind('auto-foundation', () => {
-      settings = { ...settings, autoFoundation: !settings.autoFoundation };
+    bind('smart-tap', () => {
+      settings = { ...settings, smartTap: !settings.smartTap };
       saveSettings(settings);
-      document.getElementById('auto-foundation')?.setAttribute('aria-checked', String(settings.autoFoundation));
+      document.getElementById('smart-tap')?.setAttribute('aria-checked', String(settings.smartTap));
     });
     bind('theme-felt', () => setTheme('felt'));
     bind('theme-night', () => setTheme('night'));
@@ -981,15 +1002,12 @@ export function startApp(root: HTMLElement): void {
       overlay.hidden = true;
       overlay.innerHTML = '';
     }
-    const wasOpen = overlayOpen;
     overlayOpen = false;
     if (confirmResolve) {
       const done = confirmResolve;
       confirmResolve = null;
       done(false);
     }
-    // Pick up auto-play that the menu or a dialog interrupted (or that was just switched on).
-    if (wasOpen) maybeScheduleSafe();
   }
 
   function bind(id: string, handler: () => void): void {

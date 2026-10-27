@@ -15,21 +15,21 @@ function stubStorage(initial: Record<string, string> = {}): Record<string, strin
 afterEach(() => vi.unstubAllGlobals());
 
 describe('settings', () => {
-  it('turns smart auto-play on for a save that predates the setting', () => {
-    stubStorage({ 'klondike-settings-v1': JSON.stringify({ theme: 'night', drawCount: 1, installHintDismissed: true }) });
+  it('turns smart tap on for a save that predates the setting (an old autoFoundation value is ignored)', () => {
+    stubStorage({ 'klondike-settings-v1': JSON.stringify({ theme: 'night', drawCount: 1, installHintDismissed: true, autoFoundation: false }) });
     const settings = loadSettings();
-    expect(settings.autoFoundation).toBe(true);
+    expect(settings.smartTap).toBe(true);
     expect(settings.drawCount).toBe(1);
   });
 
   it('defaults to on with no save at all', () => {
     stubStorage();
-    expect(loadSettings().autoFoundation).toBe(true);
+    expect(loadSettings().smartTap).toBe(true);
   });
 
   it('remembers an explicit off', () => {
     stubStorage();
-    saveSettings({ ...loadSettings(), autoFoundation: false });
-    expect(loadSettings().autoFoundation).toBe(false);
+    saveSettings({ ...loadSettings(), smartTap: false });
+    expect(loadSettings().smartTap).toBe(false);
   });
 });
