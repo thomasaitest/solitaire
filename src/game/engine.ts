@@ -1,5 +1,6 @@
 import type { ActionResult, Card, GameState, PileRef, PileSnapshot, PlannedMove, Suit } from './types.ts';
 import { SUITS } from './types.ts';
+import { SCORE } from './scoreConfig.ts';
 
 const MAX_UNDO = 300;
 
@@ -72,6 +73,10 @@ function cloneSnapshot(snapshot: PileSnapshot): PileSnapshot {
     score: snapshot.score,
     moves: snapshot.moves,
     won: snapshot.won,
+    drain: Number.isFinite(snapshot.drain) ? snapshot.drain : 0,
+    emptied: Array.isArray(snapshot.emptied)
+      ? snapshot.emptied.filter((col) => Number.isInteger(col) && col >= 0 && col < 7)
+      : [],
   };
 }
 
@@ -97,6 +102,8 @@ function withPiles(state: GameState, piles: PileSnapshot): GameState {
     score: piles.score,
     moves: piles.moves,
     won: piles.won,
+    drain: piles.drain,
+    emptied: piles.emptied,
   };
 }
 
@@ -191,15 +198,6 @@ export function findFoundationMove(state: GameState, from: PileRef, index: numbe
   return legalTargets(state, from, index).find((target) => target.zone === 'foundation') ?? null;
 }
 
-function scoreDelta(from: PileRef, to: PileRef, flipped: boolean): number {
-  let delta = 0;
-  if (to.zone === 'foundation' && from.zone !== 'foundation') delta += 10;
-  if (from.zone === 'waste' && to.zone === 'tableau') delta += 5;
-  if (from.zone === 'foundation' && to.zone === 'tableau') delta -= 15;
-  if (flipped) delta += 5;
-  return delta;
-}
-
 function pushUndo(state: GameState, before: PileSnapshot): PileSnapshot[] {
   const undos = [...state.undos, before];
   if (undos.length > MAX_UNDO) undos.splice(0, undos.length - MAX_UNDO);
@@ -215,6 +213,7 @@ export function moveCards(state: GameState, from: PileRef, index: number, to: Pi
 
   const before = snapshotOf(state);
   const next = clonePlayfield(state);
+  const destWasEmpty = to.zone === 'tableau' && (state.tableau[to.index]?.length ?? 0) === 0;
   let flipped = false;
 
   let cards: Card[];
@@ -247,9 +246,31 @@ export function moveCards(state: GameState, from: PileRef, index: number, to: Pi
     return { ok: false, state, reason: 'illegal' };
   }
 
-  next.score = state.score + scoreDelta(from, to, flipped);
+  // The score has no floor, so every reward and cost counts in full. That is
+  // what makes foundation shuttling a pure loss: +15 up, -15 down, -1 each move.
+  let balance = state.score;
+  const emptiedColumns = [...state.emptied];
+  if (to.zone === 'foundation' && from.zone !== 'foundation') balance += SCORE.foundationReward;
+  if (from.zone === 'foundation' && to.zone === 'tableau') balance -= SCORE.foundationReward;
+  if (from.zone === 'waste' && to.zone === 'tableau') balance += SCORE.wasteToTableauReward;
+  if (flipped) balance += SCORE.revealReward;
+  // Emptying a column pays once per column per deal. Moving a column's base
+  // card into another empty column only relocates the gap, so it pays nothing.
+  if (
+    from.zone === 'tableau' &&
+    index === 0 &&
+    (next.tableau[from.index]?.length ?? 0) === 0 &&
+    !destWasEmpty &&
+    !emptiedColumns.includes(from.index)
+  ) {
+    balance += SCORE.emptyColumnReward;
+    emptiedColumns.push(from.index);
+  }
   next.moves = state.moves + 1;
   next.won = isWon(next);
+  if (next.won) balance += SCORE.winReward;
+  next.score = balance - SCORE.movePenalty;
+  next.emptied = emptiedColumns;
   next.undos = pushUndo(state, before);
   return { ok: true, state: next };
 }
@@ -262,13 +283,13 @@ export function draw(state: GameState): ActionResult {
 
   const before = snapshotOf(state);
   const next = clonePlayfield(state);
-  let delta = 0;
+  let cost = SCORE.movePenalty;
 
   if (next.stock.length === 0) {
     // Flip the waste as one pile. The oldest waste card is dealt first next pass.
     next.stock = [...next.waste].reverse().map((card) => ({ ...card, faceUp: false }));
     next.waste = [];
-    delta = state.drawCount === 1 ? -100 : -20;
+    cost += SCORE.recyclePenalty;
   } else {
     const count = Math.min(state.drawCount, next.stock.length);
     for (let i = 0; i < count; i++) {
@@ -279,7 +300,7 @@ export function draw(state: GameState): ActionResult {
     }
   }
 
-  next.score = state.score + delta;
+  next.score = state.score - cost;
   next.moves = state.moves + 1;
   next.won = false;
   next.undos = pushUndo(state, before);
@@ -290,6 +311,12 @@ export function undo(state: GameState): ActionResult {
   const previous = state.undos[state.undos.length - 1];
   if (!previous) return { ok: false, state, reason: 'nothing' };
   const restored = cloneSnapshot(previous);
+  // Back to the score from before the undone move, minus everything lost
+  // since then that is not part of a move (clock, Hint, mistaps). Points won
+  // by the undone move are gone with it.
+  const lost = Math.max(0, state.drain - restored.drain);
+  restored.score -= lost;
+  restored.drain = state.drain;
   const next = withPiles(state, restored);
   next.undos = state.undos.slice(0, -1);
   next.elapsedMs = state.elapsedMs;
@@ -302,6 +329,7 @@ export function restartDeal(state: GameState): GameState {
     ...state,
     ...restored,
     elapsedMs: 0,
+    clockSec: 0,
     undos: [],
   };
 }
@@ -388,12 +416,17 @@ export function createGame(options: CreateGameOptions = {}): GameState {
     waste: [],
     foundations: foundations.map((pile) => pile.map(cloneCard)),
     tableau: tableau.map((pile) => pile.map(cloneCard)),
-    score: 0,
+    score: SCORE.startScore,
     moves: 0,
     won: false,
+    drain: 0,
+    emptied: [],
   };
   return {
     version: 1,
+    clockSec: 0,
+    drain: 0,
+    emptied: [],
     gameId: options.gameId ?? `${seed.toString(36)}-${Date.now().toString(36)}`,
     drawCount,
     seed,
@@ -402,7 +435,7 @@ export function createGame(options: CreateGameOptions = {}): GameState {
     waste,
     foundations,
     tableau,
-    score: 0,
+    score: SCORE.startScore,
     moves: 0,
     won: false,
     undos: [],
@@ -421,6 +454,9 @@ export interface BuildPositionInput {
   score?: number;
   moves?: number;
   elapsedMs?: number;
+  emptied?: number[];
+  drain?: number;
+  clockSec?: number;
 }
 
 /** Build a position for tests and for resuming a save. Does not validate. */
@@ -438,9 +474,14 @@ export function buildPosition(input: BuildPositionInput = {}): GameState {
     score: 0,
     moves: 0,
     won: false,
+    drain: 0,
+    emptied: [],
   };
   return {
     version: 1,
+    clockSec: input.clockSec ?? Math.floor((input.elapsedMs ?? 0) / 1000),
+    drain: input.drain ?? 0,
+    emptied: [...(input.emptied ?? [])],
     gameId: input.gameId ?? 'position',
     drawCount: input.drawCount === 1 ? 1 : 3,
     seed: input.seed ?? 1,
@@ -543,17 +584,29 @@ export function hydrate(raw: unknown): GameState | null {
   if (typeof data.gameId !== 'string' || data.gameId.length === 0) return null;
   if (typeof data.seed !== 'number' || typeof data.elapsedMs !== 'number') return null;
   if (!isValidSnapshot(data) || !isValidSnapshot(data.initial)) return null;
+  // Saves from before the points system have no clock counter. Keep their
+  // score and start charging the clock from now.
+  const legacy = typeof data.clockSec !== 'number';
+  const fix = (snapshot: PileSnapshot): PileSnapshot => {
+    const copy = cloneSnapshot(snapshot);
+    if (legacy) {
+      copy.drain = 0;
+      copy.emptied = [];
+    }
+    return copy;
+  };
   const undos = Array.isArray(data.undos) && data.undos.every((entry) => isValidSnapshot(entry))
-    ? data.undos.map((entry) => cloneSnapshot(entry))
+    ? data.undos.map((entry) => fix(entry))
     : [];
-  const state = withPiles(clonePlayfield({ ...data, undos: [], initial: cloneSnapshot(data.initial) }), cloneSnapshot(data));
+  const state = withPiles(clonePlayfield({ ...data, undos: [], initial: fix(data.initial) }), fix(data));
   state.version = 1;
   state.gameId = data.gameId;
   state.drawCount = data.drawCount;
   state.seed = data.seed >>> 0;
   state.elapsedMs = Math.max(0, data.elapsedMs);
+  state.clockSec = legacy ? Math.floor(state.elapsedMs / 1000) : Math.max(0, Math.floor(data.clockSec));
   state.undos = undos;
-  state.initial = cloneSnapshot(data.initial);
+  state.initial = fix(data.initial);
   state.won = isWon(state);
   return state;
 }

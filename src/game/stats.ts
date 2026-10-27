@@ -3,12 +3,16 @@ export interface PendingWin {
   drawCount: 1 | 3;
   timeMs: number;
   prevBest: number | null;
+  score: number;
+  prevBestScore: number | null;
 }
 
 export interface Stats {
   played: number;
   won: number;
   bestMs: { '1': number | null; '3': number | null };
+  /** Highest score at a win, per draw mode. */
+  bestScore: { '1': number | null; '3': number | null };
   /** Game id that has already incremented `played`. */
   countedGameId: string | null;
   /**
@@ -23,6 +27,7 @@ export function emptyStats(): Stats {
     played: 0,
     won: 0,
     bestMs: { '1': null, '3': null },
+    bestScore: { '1': null, '3': null },
     countedGameId: null,
     pendingWin: null,
   };
@@ -33,16 +38,19 @@ export function noteFirstMove(stats: Stats, gameId: string): Stats {
   return { ...stats, played: stats.played + 1, countedGameId: gameId };
 }
 
-export function noteWin(stats: Stats, gameId: string, drawCount: 1 | 3, timeMs: number): Stats {
+export function noteWin(stats: Stats, gameId: string, drawCount: 1 | 3, timeMs: number, score: number): Stats {
   if (stats.pendingWin?.gameId === gameId) return stats;
   const key = drawCount === 1 ? '1' : '3';
   const prevBest = stats.bestMs[key];
   const best = prevBest == null || timeMs < prevBest ? timeMs : prevBest;
+  const prevBestScore = stats.bestScore[key];
+  const bestScore = prevBestScore == null || score > prevBestScore ? score : prevBestScore;
   return {
     ...stats,
     won: stats.won + 1,
     bestMs: { ...stats.bestMs, [key]: best },
-    pendingWin: { gameId, drawCount, timeMs, prevBest },
+    bestScore: { ...stats.bestScore, [key]: bestScore },
+    pendingWin: { gameId, drawCount, timeMs, prevBest, score, prevBestScore },
   };
 }
 
@@ -54,6 +62,7 @@ export function revertWin(stats: Stats, gameId: string): Stats {
     ...stats,
     won: Math.max(0, stats.won - 1),
     bestMs: { ...stats.bestMs, [key]: pending.prevBest },
+    bestScore: { ...stats.bestScore, [key]: pending.prevBestScore },
     pendingWin: null,
   };
 }
@@ -62,6 +71,13 @@ export function revertWin(stats: Stats, gameId: string): Stats {
 export function commitPendingWin(stats: Stats): Stats {
   if (!stats.pendingWin) return stats;
   return { ...stats, pendingWin: null };
+}
+
+/** True when the win now on record set a new best score (not the very first win). */
+export function isNewBestScore(stats: Stats, gameId: string): boolean {
+  const pending = stats.pendingWin;
+  if (!pending || pending.gameId !== gameId) return false;
+  return pending.prevBestScore != null && pending.score > pending.prevBestScore;
 }
 
 export function winRate(stats: Stats): number {

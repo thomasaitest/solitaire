@@ -88,7 +88,13 @@ function pendingWin(value: unknown): PendingWin | null {
     drawCount: data.drawCount,
     timeMs: data.timeMs,
     prevBest: data.prevBest == null ? null : numberOr(data.prevBest, 0),
+    score: numberOr(data.score, 0),
+    prevBestScore: data.prevBestScore == null ? null : numberOr(data.prevBestScore, 0),
   };
+}
+
+function bestScoreOf(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null;
 }
 
 export function loadStats(): Stats {
@@ -102,6 +108,10 @@ export function loadStats(): Stats {
     bestMs: {
       '1': best['1'] == null ? null : Math.max(0, numberOr(best['1'], 0)),
       '3': best['3'] == null ? null : Math.max(0, numberOr(best['3'], 0)),
+    },
+    bestScore: {
+      '1': bestScoreOf(data.bestScore?.['1']),
+      '3': bestScoreOf(data.bestScore?.['3']),
     },
     countedGameId: typeof data.countedGameId === 'string' ? data.countedGameId : null,
     pendingWin: pendingWin(data.pendingWin),

@@ -8,15 +8,15 @@ describe('stats', () => {
     stats = noteFirstMove(stats, 'game-a');
     expect(stats.played).toBe(1);
 
-    stats = noteWin(stats, 'game-a', 3, 90_000);
+    stats = noteWin(stats, 'game-a', 3, 90_000, 0);
     expect(stats.won).toBe(1);
     expect(stats.bestMs['3']).toBe(90_000);
     expect(winRate(stats)).toBe(100);
 
-    stats = noteWin(stats, 'game-a', 3, 10_000);
+    stats = noteWin(stats, 'game-a', 3, 10_000, 0);
     expect(stats.won).toBe(1);
 
-    const slower = noteWin(revertWin(stats, 'game-a'), 'game-a', 3, 120_000);
+    const slower = noteWin(revertWin(stats, 'game-a'), 'game-a', 3, 120_000, 0);
     expect(slower.won).toBe(1);
     expect(slower.bestMs['3']).toBe(120_000);
 
@@ -27,8 +27,8 @@ describe('stats', () => {
   });
 
   it('keeps a better time and commits the win when the game is left behind', () => {
-    let stats = noteWin(noteFirstMove(emptyStats(), 'game-a'), 'game-a', 1, 50_000);
-    stats = noteWin(noteFirstMove(commitPendingWin(stats), 'game-b'), 'game-b', 1, 80_000);
+    let stats = noteWin(noteFirstMove(emptyStats(), 'game-a'), 'game-a', 1, 50_000, 0);
+    stats = noteWin(noteFirstMove(commitPendingWin(stats), 'game-b'), 'game-b', 1, 80_000, 0);
     expect(stats.played).toBe(2);
     expect(stats.won).toBe(2);
     expect(stats.bestMs['1']).toBe(50_000);

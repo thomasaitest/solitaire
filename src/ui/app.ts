@@ -1,5 +1,6 @@
-import { scoreParts, formatNumber, formatTime } from '../game/scoring.ts';
-import { commitPendingWin, noteFirstMove, noteWin, revertWin, winRate } from '../game/stats.ts';
+import { shownScore, formatScore, formatTime } from '../game/scoring.ts';
+import { SCORE } from '../game/scoreConfig.ts';
+import { commitPendingWin, isNewBestScore, noteFirstMove, noteWin, revertWin, winRate } from '../game/stats.ts';
 import {
   buildPosition,
   createGame,
@@ -17,7 +18,7 @@ import {
 import type { GameState, PileRef } from '../game/types.ts';
 import { SUITS } from '../game/types.ts';
 import { findHint, stateKey } from '../game/hint.ts';
-import { chargePenalty } from '../game/penalty.ts';
+import { chargeHint, chargeMistap, chargeUndo, tickClock } from '../game/penalty.ts';
 import { tapTarget } from '../game/smartTap.ts';
 import { loadGame, loadSettings, loadStats, saveGame, saveSettings, saveStats } from '../storage.ts';
 import { Capacitor } from '@capacitor/core';
@@ -143,14 +144,33 @@ export function startApp(root: HTMLElement): void {
   );
 
   let lastTick = performance.now();
+  document.addEventListener('visibilitychange', () => {
+    lastTick = performance.now();
+  });
   window.setInterval(() => {
     const now = performance.now();
-    const delta = now - lastTick;
+    // A timer that was frozen in the background can wake up late. Never let
+    // that gap count as play time.
+    const delta = Math.min(now - lastTick, 1000);
     lastTick = now;
-    if (!document.hidden && !state.won) elapsedMs += delta;
+    if (clockRunning()) {
+      elapsedMs += delta;
+      syncClock();
+    }
     updateHud();
     if (elapsedMs - lastPersist > 5000) persist();
   }, 250);
+
+  /** The clock runs after the first move, while the app is visible, no dialog is open and the game is not won. */
+  function clockRunning(): boolean {
+    return !document.hidden && !overlayOpen && !state.won && state.moves > 0;
+  }
+
+  /** Charge the points for whole seconds played so far. Called before every action too. */
+  function syncClock(): void {
+    const ticked = tickClock(state, elapsedMs);
+    if (ticked.state !== state) state = ticked.state;
+  }
 
   function applyDevPreview(): GameState | null {
     if (!import.meta.env.DEV) return null;
@@ -214,11 +234,12 @@ export function startApp(root: HTMLElement): void {
   }
 
   function updateHud(): void {
-    const parts = scoreParts(state.score, elapsedMs, state.won);
-    const next = `${parts.total}|${state.moves}|${formatTime(elapsedMs)}|${state.drawCount}|${state.undos.length}`;
+    const total = shownScore(state);
+    const next = `${total}|${state.moves}|${formatTime(elapsedMs)}|${state.drawCount}|${state.undos.length}`;
     if (next === hudCache) return;
     hudCache = next;
-    scoreEl!.textContent = formatNumber(parts.total);
+    scoreEl!.textContent = formatScore(total);
+    scoreEl!.classList.toggle('is-negative', total < 0);
     movesEl!.textContent = String(state.moves);
     timeEl!.textContent = formatTime(elapsedMs);
     undoButton!.disabled = state.undos.length === 0;
@@ -242,7 +263,7 @@ export function startApp(root: HTMLElement): void {
   function syncStats(prev: GameState, next: GameState, kind: ActionKind): void {
     if (!recordStats || prev.gameId !== next.gameId) return;
     if (prev.moves === 0 && next.moves > 0) stats = noteFirstMove(stats, next.gameId);
-    if (!prev.won && next.won) stats = noteWin(stats, next.gameId, next.drawCount, elapsedMs);
+    if (!prev.won && next.won) stats = noteWin(stats, next.gameId, next.drawCount, elapsedMs, shownScore(next));
     if (kind === 'undo' && prev.won && !next.won) stats = revertWin(stats, next.gameId);
     rememberStats();
   }
@@ -296,7 +317,7 @@ export function startApp(root: HTMLElement): void {
     );
   }
 
-  function applyResult(prev: GameState, next: GameState, rects: Map<string, DOMRect>, kind: ActionKind): void {
+  function applyResult(prev: GameState, next: GameState, rects: Map<string, DOMRect>, kind: ActionKind, anchorId?: string): void {
     if (hintTimer !== null) clearHint();
     if (kind === 'draw') {
       const stockRect = document.querySelector('[data-zone="stock"]')?.getBoundingClientRect();
@@ -313,6 +334,19 @@ export function startApp(root: HTMLElement): void {
     render({ dealing: false, flipped });
     animateFrom(rects);
     updateHud();
+    if (kind !== 'undo') {
+      const gained = shownScore(next) - shownScore(prev);
+      if (gained !== 0) {
+        // A plain move (-1) only pings the counter; bigger changes also float near the cards.
+        const anchor =
+          kind === 'draw'
+            ? document.querySelector('[data-zone="waste"]')
+            : anchorId
+              ? document.querySelector(`[data-card-id="${CSS.escape(anchorId)}"]`)
+              : null;
+        pop(gained, Math.abs(gained) > 1 ? anchor : null);
+      }
+    }
     if (!next.won) {
       winDismissed = false;
       if (document.querySelector('.win-dialog')) closeOverlay();
@@ -326,6 +360,7 @@ export function startApp(root: HTMLElement): void {
 
   function doMove(from: PileRef, index: number, to: PileRef, preset?: Map<string, DOMRect>): void {
     clearPending();
+    syncClock();
     const moving = movingCards(state, from, index);
     const rects = preset ?? captureRects();
     const prev = state;
@@ -339,13 +374,14 @@ export function startApp(root: HTMLElement): void {
       lastMovedId = moving[0].id;
       lastMovedAt = performance.now();
     }
-    applyResult(prev, result.state, rects, 'move');
+    applyResult(prev, result.state, rects, 'move', moving?.[0]?.id);
   }
 
   function doDraw(): void {
     if (state.won || overlayOpen) return;
     cancelAuto();
     clearPending();
+    syncClock();
     const prev = state;
     const rects = captureRects();
     const result = draw({ ...state, elapsedMs });
@@ -361,15 +397,16 @@ export function startApp(root: HTMLElement): void {
     cancelAuto();
     clearPending();
     suppressAuto = true;
+    syncClock();
     const prev = state;
     const rects = captureRects();
     const result = undo({ ...state, elapsedMs });
     if (!result.ok) return;
     winDismissed = false;
-    // The previous position comes back first; the penalty is charged on top of it.
-    const charge = chargePenalty(result.state, elapsedMs);
+    // The previous position and its score come back first; the Angre charge is applied on top.
+    const charge = chargeUndo(result.state);
     applyResult(prev, charge.state, rects, 'undo');
-    if (charge.charged > 0) showPenalty(charge.charged);
+    if (charge.charged > 0) pop(-charge.charged, null);
     if (!result.state.won) closeOverlay();
   }
 
@@ -453,7 +490,7 @@ export function startApp(root: HTMLElement): void {
     const ambiguous = Boolean(foundation && best && !samePile(foundation, best));
     if (!ambiguous) {
       if (best) doMove(from, index, best);
-      else shake(document.querySelector(`[data-card-id="${CSS.escape(id)}"]`));
+      else mistap(id);
       return;
     }
 
@@ -473,6 +510,19 @@ export function startApp(root: HTMLElement): void {
         if (next) doMove(pending.from, pending.index, next);
       }, 240),
     };
+  }
+
+  /** A tap on a card that has nowhere to go: shake, and take the mistap points. */
+  function mistap(id: string): void {
+    const el = document.querySelector(`[data-card-id="${CSS.escape(id)}"]`);
+    shake(el);
+    syncClock();
+    const charged = chargeMistap(state);
+    if (charged.charged === 0) return;
+    state = charged.state;
+    persist();
+    updateHud();
+    pop(-charged.charged, el);
   }
 
   function onPointerDown(event: PointerEvent): void {
@@ -766,12 +816,13 @@ export function startApp(root: HTMLElement): void {
     }
     // A hint costs points, but asking again for the one on screen does not.
     if (!alreadyShowing) {
-      const charge = chargePenalty(state, elapsedMs);
+      syncClock();
+      const charge = chargeHint(state);
       if (charge.charged > 0) {
         state = charge.state;
         persist();
         updateHud();
-        showPenalty(charge.charged);
+        pop(-charge.charged, null);
       }
     }
     if (hint.kind === 'draw') {
@@ -799,14 +850,40 @@ export function startApp(root: HTMLElement): void {
     hintTimer = window.setTimeout(() => clearHint(), 3200);
   }
 
-  function showPenalty(points: number): void {
+  /**
+   * Float +N / -N next to the Poeng counter and, when an anchor is given,
+   * next to the action itself.
+   */
+  function pop(points: number, anchor: Element | null): void {
+    if (points === 0) return;
+    const text = points > 0 ? `+${points}` : `\u2212${Math.abs(points)}`;
+    const tone = points > 0 ? 'up' : 'down';
     const host = scoreEl!.parentElement;
-    if (!host) return;
-    const pop = document.createElement('span');
-    pop.className = 'penalty-pop';
-    pop.textContent = `-${points}`;
-    host.appendChild(pop);
-    window.setTimeout(() => pop.remove(), 1000);
+    if (host) {
+      const el = document.createElement('span');
+      el.className = `score-pop ${tone}`;
+      el.textContent = text;
+      el.setAttribute('aria-hidden', 'true');
+      host.appendChild(el);
+      window.setTimeout(() => el.remove(), 1200);
+      scoreEl!.classList.remove('bump-up', 'bump-down');
+      void scoreEl!.offsetWidth;
+      scoreEl!.classList.add(points > 0 ? 'bump-up' : 'bump-down');
+    }
+    if (anchor) {
+      const rect = anchor.getBoundingClientRect();
+      if (rect.width > 0) {
+        const el = document.createElement('span');
+        el.className = `float-pop ${tone}`;
+        el.textContent = text;
+        el.setAttribute('aria-hidden', 'true');
+        el.style.left = `${rect.left + rect.width / 2}px`;
+        el.style.top = `${Math.max(8, rect.top - 2)}px`;
+        document.body.appendChild(el);
+        window.setTimeout(() => el.remove(), 1200);
+      }
+    }
+    if (Math.abs(points) > 1) liveEl!.textContent = `${points > 0 ? 'Pluss' : 'Minus'} ${Math.abs(points)} poeng.`;
   }
 
   function openNoMoves(): void {
@@ -837,10 +914,13 @@ export function startApp(root: HTMLElement): void {
 
   function openMenu(): void {
     cancelAuto();
-    const parts = scoreParts(state.score, elapsedMs, state.won);
     const best = (mode: 1 | 3) => {
       const value = stats.bestMs[mode === 1 ? '1' : '3'];
       return value == null ? '—' : formatTime(value);
+    };
+    const bestPoints = (mode: 1 | 3) => {
+      const value = stats.bestScore[mode === 1 ? '1' : '3'];
+      return value == null ? '—' : formatScore(value);
     };
     showOverlay(`
       <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="menu-title">
@@ -874,18 +954,21 @@ export function startApp(root: HTMLElement): void {
           <div><span>${stats.played}</span><small>Spilt</small></div>
           <div><span>${stats.won}</span><small>Vunnet</small></div>
           <div><span>${winRate(stats)}%</span><small>Vinnerandel</small></div>
-          <div><span>${formatNumber(parts.total)}</span><small>Poeng nå</small></div>
-          <div><span>${best(1)}</span><small>Best · ett kort</small></div>
-          <div><span>${best(3)}</span><small>Best · tre kort</small></div>
+          <div><span class="${shownScore(state) < 0 ? 'is-negative' : ''}">${formatScore(shownScore(state))}</span><small>Poeng nå</small></div>
+          <div><span>${bestPoints(1)}</span><small>Beste · ett kort</small></div>
+          <div><span>${bestPoints(3)}</span><small>Beste · tre kort</small></div>
+          <div><span>${state.moves}</span><small>Trekk nå</small></div>
+          <div><span>${best(1)}</span><small>Best tid · ett kort</small></div>
+          <div><span>${best(3)}</span><small>Best tid · tre kort</small></div>
         </div>
         <p class="section-label">Slik spiller du</p>
         <div class="rules">
           <p>Bygg hver grunnbunke fra ess til konge, én sort om gangen. Grunnbunkene ligger øverst til høyre: spar, hjerter, ruter, kløver.</p>
           <p>På bordet bygger du nedover med annenhver farge. En rad med åpne kort kan flyttes samlet. Bare en konge kan legges i en tom kolonne.</p>
           <p>Trykk på et kort for å flytte det. Med «Smart trykk» på sender trykket trygge kort rett til grunnbunken: ess og to-ere, og andre kort når begge kortene med motsatt farge og én lavere verdi allerede ligger der. Ellers går kortet til beste lovlige plass på bordet, og til grunnbunken hvis det ikke finnes noe annet. Ingenting flyttes av seg selv. Dobbelttrykk legger et kort på grunnbunken. Du kan også dra kortene. Trykk på bunken for å trekke. Når den er tom, trykker du igjen for å snu kastebunken. Med tre kort vises tre, men bare det øverste kan spilles.</p>
-          <p>Hint ser på hele bordet og bunken og viser et nyttig trekk: å åpne et skjult kort, spille til grunnbunken eller tømme en kolonne. Hvis neste fremgang ligger i bunken, peker det på den og sier hvilket kort som blir spillbart. Når det ikke finnes flere trekk, får du beskjed. Hint og Angre koster 5 poeng hver (aldri under 0). Når alle kort ligger åpne og resten kan legges opp, fullfører spillet seg selv.</p>
-          <p>Et kort på grunnbunken gir 10 poeng. Å spille fra kastebunken eller snu et kort gir 5. Å ta et kort ned fra grunnbunken koster 15. Å snu kastebunken koster 20 med tre kort og 100 med ett kort. To poeng forsvinner hvert tiende sekund. En seier gir 700 000 delt på antall sekunder i bonus.</p>
-          <p>Angre er ubegrenset. Mellomrom trekker, N deler ut nytt spill og Ctrl eller Cmd Z angrer. Spillet lagres bare på denne enheten.</p>
+          <p>Hint ser på hele bordet og bunken og viser et nyttig trekk: å åpne et skjult kort, spille til grunnbunken eller tømme en kolonne. Hvis neste fremgang ligger i bunken, peker det på den og sier hvilket kort som blir spillbart. Når det ikke finnes flere trekk, får du beskjed. Når alle kort ligger åpne og resten kan legges opp, fullfører spillet seg selv.</p>
+          ${scoreRulesHtml()}
+          <p>Angre er ubegrenset, men koster poeng. Mellomrom trekker, N deler ut nytt spill og Ctrl eller Cmd Z angrer. Spillet lagres bare på denne enheten.</p>
         </div>
       </div>
     `);
@@ -926,7 +1009,10 @@ export function startApp(root: HTMLElement): void {
 
   function openWin(): void {
     if (winDismissed || !state.won || document.querySelector('.win-dialog')) return;
-    const parts = scoreParts(state.score, elapsedMs, true);
+    const total = shownScore(state);
+    const key = state.drawCount === 1 ? '1' : '3';
+    const bestNow = Math.max(stats.bestScore[key] ?? total, total);
+    const record = isNewBestScore(stats, state.gameId);
     const suits = SUITS.map((suit) => suitSvg(suit, 28, suit === 'h' || suit === 'd' ? '#ff3b30' : '#1c1c1e')).join('');
     showOverlay(`
       <div class="modal win-dialog" role="dialog" aria-modal="true" aria-labelledby="win-title">
@@ -934,12 +1020,11 @@ export function startApp(root: HTMLElement): void {
         <h2 id="win-title">Godt spilt!</h2>
         <p class="modal-copy">Alle 52 kortene er lagt opp.</p>
         <div class="suit-row">${suits}</div>
-        <p class="win-time">${formatTime(elapsedMs)}</p>
-        <p class="win-score">${formatNumber(parts.total)}</p>
+        <p class="win-score${total < 0 ? ' is-negative' : ''}">${formatScore(total)}</p>
+        <p class="win-best${record ? ' record' : ''}">${record ? 'Ny rekord! ' : ''}Beste: ${formatScore(bestNow)}</p>
         <dl class="breakdown">
-          <div><dt>Spill</dt><dd>${formatNumber(parts.play)}</dd></div>
-          <div><dt>Tid</dt><dd>−${formatNumber(parts.timePenalty)}</dd></div>
-          <div><dt>Bonus</dt><dd>${formatNumber(parts.bonus)}</dd></div>
+          <div><dt>Tid</dt><dd>${formatTime(elapsedMs)}</dd></div>
+          <div><dt>Trekk</dt><dd>${state.moves}</dd></div>
         </dl>
         <div class="modal-actions">
           <button type="button" class="btn primary" id="win-new">Nytt spill</button>
@@ -1033,6 +1118,14 @@ export function startApp(root: HTMLElement): void {
       hintEl!.hidden = true;
     });
   }
+}
+
+/** The Valg text about points, built from the one SCORE config so it never drifts. */
+function scoreRulesHtml(): string {
+  const c = SCORE;
+  return `<p><strong>Poeng.</strong> Fart eller nøyaktighet? Hvert trekk koster ${c.movePenalty}, hvert sekund koster ${c.secondPenalty}, og et trykk på et kort som ikke kan flyttes noe sted koster ${c.mistapPenalty}. Å snu kastebunken koster ${c.recyclePenalty} ekstra. Klokka går bare etter første trekk, og står stille når appen er i bakgrunnen, når en meny er åpen og når du har vunnet.</p>
+          <p>Du får ${c.foundationReward} for hvert kort til grunnbunken (og mister ${c.foundationReward} hvis du tar det ned igjen), ${c.revealReward} for å åpne et skjult kort, ${c.wasteToTableauReward} for å spille fra kastebunken til bordet, ${c.emptyColumnReward} for å tømme en kolonne (bare én gang per kolonne) og ${c.winReward} for seier.</p>
+          <p>Hint og Angre koster ${c.hintPenalty} poeng hver. Angre tar tilbake poengene fra trekket du angrer, men ikke tiden som har gått. Poengene har ingen bunn: de kan bli negative, og da vises de med minus. Du starter med ${c.startScore} poeng. Beste poengsum lagres på denne enheten.</p>`;
 }
 
 function applyTheme(theme: 'felt' | 'night'): void {

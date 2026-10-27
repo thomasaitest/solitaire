@@ -50,10 +50,19 @@ export interface PileSnapshot {
   score: number;
   moves: number;
   won: boolean;
+  /**
+   * Points lost to things Angre cannot take back: time, Hint, mistaps and
+   * earlier Angre charges. Undo keeps them lost.
+   */
+  drain: number;
+  /** Tableau columns that have already paid the empty-column reward this deal. */
+  emptied: number[];
 }
 
 export interface GameState extends PileSnapshot {
   version: 1;
+  /** Whole seconds of play that the clock has already charged. */
+  clockSec: number;
   gameId: string;
   drawCount: 1 | 3;
   seed: number;

@@ -78,7 +78,7 @@ describe('stock', () => {
     expect(result.state.waste[0]?.faceUp).toBe(true);
     expect(result.state.stock).toHaveLength(23);
     expect(result.state.moves).toBe(1);
-    expect(result.state.score).toBe(0);
+    expect(result.state.score).toBe(-1);
   });
 
   it('draws three cards with the last one on top', () => {
@@ -110,6 +110,7 @@ describe('stock', () => {
     const state = buildPosition({
       drawCount: 3,
       stock: [],
+      score: 50,
       waste: [makeCard('s', 1), makeCard('h', 2), makeCard('d', 3), makeCard('c', 4)],
     });
     const result = draw(state);
@@ -118,19 +119,20 @@ describe('stock', () => {
     // The old bottom card is the first one dealt on the next pass.
     expect(ids(result.state.stock)).toEqual(['c4', 'd3', 'h2', 's1']);
     expect(result.state.stock.every((card) => !card.faceUp)).toBe(true);
-    expect(result.state.score).toBe(-20);
+    expect(result.state.score).toBe(44); // 50 - 1 move - 5 recycle
     const again = draw(result.state);
     expect(ids(again.state.waste)).toEqual(['s1', 'h2', 'd3']);
     expect(ids(again.state.stock)).toEqual(['c4']);
   });
 
-  it('charges more to recycle in draw-1', () => {
+  it('charges the same recycle price in draw-1', () => {
     const state = buildPosition({
       drawCount: 1,
       stock: [],
+      score: 50,
       waste: [makeCard('s', 1), makeCard('h', 2)],
     });
-    expect(draw(state).state.score).toBe(-100);
+    expect(draw(state).state.score).toBe(44);
   });
 
   it('does nothing when both piles are empty', () => {
@@ -151,7 +153,7 @@ describe('moves', () => {
     const redOnBlack = moveCards(state, { zone: 'waste', index: 1 }, 1, { zone: 'tableau', index: 0 });
     expect(redOnBlack.ok).toBe(true);
     expect(ids(redOnBlack.state.tableau[0] ?? [])).toEqual(['s10', 'h9']);
-    expect(redOnBlack.state.score).toBe(5);
+    expect(redOnBlack.state.score).toBe(4); // +5 waste to tableau, -1 move
     expect(state.tableau[0]).toHaveLength(1);
 
     const sameColor = moveCards(state, { zone: 'waste', index: 1 }, 1, { zone: 'tableau', index: 1 });
@@ -210,7 +212,7 @@ describe('moves', () => {
     const result = moveCards(state, { zone: 'tableau', index: 0 }, 1, { zone: 'tableau', index: 1 });
     expect(result.ok).toBe(true);
     expect(result.state.tableau[0]?.[0]).toMatchObject({ id: 'c9', faceUp: true });
-    expect(result.state.score).toBe(5);
+    expect(result.state.score).toBe(9); // +10 reveal, -1 move
     expect(state.tableau[0]?.[0]?.faceUp).toBe(false);
   });
 
@@ -224,7 +226,7 @@ describe('moves', () => {
     const ace = moveCards(state, { zone: 'waste', index: 2 }, 2, { zone: 'foundation', index: 1 });
     expect(ace.ok).toBe(true);
     expect(ids(ace.state.foundations[1] ?? [])).toEqual(['h1']);
-    expect(ace.state.score).toBe(10);
+    expect(ace.state.score).toBe(14); // +15 foundation, -1 move
 
     const wrongSuit = moveCards(ace.state, { zone: 'waste', index: 1 }, 1, { zone: 'foundation', index: 1 });
     expect(wrongSuit.ok).toBe(false);
@@ -257,7 +259,7 @@ describe('moves', () => {
     });
     const moved = moveCards(back, { zone: 'foundation', index: 1 }, 0, { zone: 'tableau', index: 0 });
     expect(moved.ok).toBe(true);
-    expect(moved.state.score).toBe(-15);
+    expect(moved.state.score).toBe(-16); // -15 taken back down, -1 move
     expect(ids(moved.state.tableau[0] ?? [])).toEqual(['s2', 'h1']);
     expect(moveCards(moved.state, { zone: 'foundation', index: 1 }, 0, { zone: 'tableau', index: 1 }).ok).toBe(false);
   });
@@ -394,7 +396,7 @@ describe('win and auto-complete', () => {
       cursor = applied.state;
     }
     expect(isWon(cursor)).toBe(true);
-    expect(cursor.score).toBe(140);
+    expect(cursor.score).toBe(396); // 4 x (+15 foundation +10 empty column -1 move) + 200 win
     const reopened = undo(cursor).state;
     expect(reopened.won).toBe(false);
     expect(reopened.foundations.some((pile) => pile.length === 12)).toBe(true);
