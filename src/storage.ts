@@ -11,6 +11,8 @@ export interface Settings {
   theme: 'felt' | 'night';
   drawCount: 1 | 3;
   installHintDismissed: boolean;
+  /** Send cards to the foundations on their own when that is safe. */
+  autoFoundation: boolean;
 }
 
 function bucket(): Storage | null {
@@ -55,6 +57,7 @@ export function defaultSettings(): Settings {
     theme: night ? 'night' : 'felt',
     drawCount: 3,
     installHintDismissed: false,
+    autoFoundation: true,
   };
 }
 
@@ -67,6 +70,7 @@ export function loadSettings(): Settings {
     theme: data.theme === 'night' || data.theme === 'felt' ? data.theme : defaults.theme,
     drawCount: data.drawCount === 1 ? 1 : data.drawCount === 3 ? 3 : defaults.drawCount,
     installHintDismissed: data.installHintDismissed === true,
+    autoFoundation: data.autoFoundation !== false,
   };
 }
 

@@ -17,6 +17,7 @@ import {
 } from '../game/engine.ts';
 import type { GameState, PileRef } from '../game/types.ts';
 import { SUITS } from '../game/types.ts';
+import { applySafeAutoMove, findSafeAutoMove } from '../game/autoplay.ts';
 import { findHint } from '../game/hint.ts';
 import { loadGame, loadSettings, loadStats, saveGame, saveSettings, saveStats } from '../storage.ts';
 import { Capacitor } from '@capacitor/core';
@@ -44,7 +45,7 @@ interface PendingTap {
   timer: number;
 }
 
-type ActionKind = 'move' | 'draw' | 'undo' | 'auto';
+type ActionKind = 'move' | 'draw' | 'undo' | 'auto' | 'safe';
 
 export function startApp(root: HTMLElement): void {
   const table = document.getElementById('table');
@@ -87,6 +88,7 @@ export function startApp(root: HTMLElement): void {
   let overlayOpen = false;
   let confirmResolve: ((value: boolean) => void) | null = null;
   let autoTimer: number | null = null;
+  let safeTimer: number | null = null;
   let suppressAuto = false;
   let winDismissed = false;
   let lastMovedId = '';
@@ -101,7 +103,7 @@ export function startApp(root: HTMLElement): void {
   render({ dealing: !preview, flipped: new Set() });
   updateHud();
   if (state.won) openWin();
-  else maybeScheduleAuto();
+  else if (!maybeScheduleAuto()) maybeScheduleSafe();
 
   const resize = new ResizeObserver(() => {
     const key = `${root.clientWidth}x${root.clientHeight}`;
@@ -314,7 +316,7 @@ export function startApp(root: HTMLElement): void {
     }
     if (kind === 'move' || kind === 'draw') suppressAuto = false;
     if (kind !== 'auto' && kind !== 'undo' && !suppressAuto) {
-      const scheduled = maybeScheduleAuto();
+      const scheduled = maybeScheduleAuto() || maybeScheduleSafe();
       if (!scheduled && next.won && !prev.won) openWin();
     }
   }
@@ -397,9 +399,35 @@ export function startApp(root: HTMLElement): void {
     autoTimer = window.setTimeout(stepAuto, reduceMotion ? 0 : 150);
   }
 
+  /**
+   * Safe auto-play to the foundations (see game/autoplay.ts). Runs one card at a
+   * time after a move, draw or deal, and never while a gesture or sheet is open.
+   */
+  function maybeScheduleSafe(): boolean {
+    if (!settings.autoFoundation || suppressAuto || safeTimer !== null || autoTimer !== null) return false;
+    if (gesture || overlayOpen || state.won) return false;
+    if (!findSafeAutoMove(state)) return false;
+    safeTimer = window.setTimeout(stepSafe, reduceMotion ? 0 : 260);
+    return true;
+  }
+
+  function stepSafe(): void {
+    safeTimer = null;
+    if (gesture || overlayOpen || !settings.autoFoundation || suppressAuto || autoTimer !== null) return;
+    const move = findSafeAutoMove(state);
+    if (!move) return;
+    const prev = state;
+    const rects = captureRects();
+    const next = applySafeAutoMove({ ...state, elapsedMs }, move);
+    if (!next) return;
+    applyResult(prev, next, rects, 'safe');
+  }
+
   function cancelAuto(): void {
     if (autoTimer !== null) window.clearTimeout(autoTimer);
     autoTimer = null;
+    if (safeTimer !== null) window.clearTimeout(safeTimer);
+    safeTimer = null;
     setStatus('');
   }
 
@@ -548,7 +576,10 @@ export function startApp(root: HTMLElement): void {
       else finishDrag(current, event.clientX, event.clientY);
       return;
     }
-    if (cancelled) return;
+    if (cancelled) {
+      maybeScheduleSafe();
+      return;
+    }
     if (current.kind === 'stock') {
       if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) < 12) doDraw();
       return;
@@ -609,7 +640,10 @@ export function startApp(root: HTMLElement): void {
     }
     layer.style.transition = 'transform 160ms ease';
     layer.style.transform = 'translate(0px, 0px)';
-    window.setTimeout(() => clearDrag(), 170);
+    window.setTimeout(() => {
+      clearDrag();
+      maybeScheduleSafe();
+    }, 170);
   }
 
   function clearDrag(): void {
@@ -674,6 +708,7 @@ export function startApp(root: HTMLElement): void {
     render({ dealing: true, flipped: new Set() });
     updateHud();
     liveEl!.textContent = 'Nytt spill er delt ut.';
+    maybeScheduleSafe();
     window.setTimeout(() => {
       document.querySelectorAll('.deal').forEach((el) => el.classList.remove('deal'));
     }, 900);
@@ -690,11 +725,12 @@ export function startApp(root: HTMLElement): void {
     state = restartDeal({ ...state, elapsedMs });
     elapsedMs = 0;
     winDismissed = false;
-    suppressAuto = true;
+    suppressAuto = false;
     hudCache = '';
     persist();
     render({ dealing: true, flipped: new Set() });
     updateHud();
+    maybeScheduleSafe();
     window.setTimeout(() => {
       document.querySelectorAll('.deal').forEach((el) => el.classList.remove('deal'));
     }, 900);
@@ -801,6 +837,11 @@ export function startApp(root: HTMLElement): void {
           <button type="button" id="draw-1" aria-pressed="${state.drawCount === 1}">Ett kort</button>
           <button type="button" id="draw-3" aria-pressed="${state.drawCount === 3}">Tre kort</button>
         </div>
+        <p class="section-label">Spill</p>
+        <button type="button" class="row switch-row" id="auto-foundation" role="switch" aria-checked="${settings.autoFoundation}">
+          <span class="switch-text">Flytt kort opp automatisk<small>Ess og trygge kort går opp av seg selv</small></span>
+          <span class="switch" aria-hidden="true"></span>
+        </button>
         <p class="section-label">Utseende</p>
         <div class="segment" role="group" aria-label="Utseende">
           <button type="button" id="theme-felt" aria-pressed="${settings.theme === 'felt'}">Lys</button>
@@ -820,6 +861,7 @@ export function startApp(root: HTMLElement): void {
           <p>Bygg hver grunnbunke fra ess til konge, én sort om gangen. Grunnbunkene ligger øverst til høyre: spar, hjerter, ruter, kløver.</p>
           <p>På bordet bygger du nedover med annenhver farge. En rad med åpne kort kan flyttes samlet. Bare en konge kan legges i en tom kolonne.</p>
           <p>Trykk på et kort for å sende det til beste lovlige plass. Dobbelttrykk for å legge det på grunnbunken. Du kan også dra kortene. Trykk på bunken for å trekke. Når den er tom, trykker du igjen for å snu kastebunken. Med tre kort vises tre, men bare det øverste kan spilles.</p>
+          <p>Med «Flytt kort opp automatisk» går ess og to-ere opp av seg selv, og andre kort når begge kortene med motsatt farge og én lavere verdi allerede ligger på grunnbunkene. Ett Angre tar tilbake trekket ditt og alt som fulgte automatisk etter.</p>
           <p>Hint viser ett lovlig trekk. Når alle kort ligger åpne og resten kan legges opp, fullfører spillet seg selv.</p>
           <p>Et kort på grunnbunken gir 10 poeng. Å spille fra kastebunken eller snu et kort gir 5. Å ta et kort ned fra grunnbunken koster 15. Å snu kastebunken koster 20 med tre kort og 100 med ett kort. To poeng forsvinner hvert tiende sekund. En seier gir 700 000 delt på antall sekunder i bonus.</p>
           <p>Angre er ubegrenset. Mellomrom trekker, N deler ut nytt spill og Ctrl eller Cmd Z angrer. Spillet lagres bare på denne enheten.</p>
@@ -842,6 +884,11 @@ export function startApp(root: HTMLElement): void {
     bind('draw-3', () => {
       closeOverlay();
       void changeDraw(3);
+    });
+    bind('auto-foundation', () => {
+      settings = { ...settings, autoFoundation: !settings.autoFoundation };
+      saveSettings(settings);
+      document.getElementById('auto-foundation')?.setAttribute('aria-checked', String(settings.autoFoundation));
     });
     bind('theme-felt', () => setTheme('felt'));
     bind('theme-night', () => setTheme('night'));
@@ -934,12 +981,15 @@ export function startApp(root: HTMLElement): void {
       overlay.hidden = true;
       overlay.innerHTML = '';
     }
+    const wasOpen = overlayOpen;
     overlayOpen = false;
     if (confirmResolve) {
       const done = confirmResolve;
       confirmResolve = null;
       done(false);
     }
+    // Pick up auto-play that the menu or a dialog interrupted (or that was just switched on).
+    if (wasOpen) maybeScheduleSafe();
   }
 
   function bind(id: string, handler: () => void): void {
