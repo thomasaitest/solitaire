@@ -31,9 +31,9 @@ export default defineConfig(({ mode }) => {
         includeAssets: ['favicon.svg', 'icons/*.png'],
         manifest: {
           id: './',
-          name: 'Kabal – Klondike',
-          short_name: 'Kabal',
-          description: 'Klassisk kabal (Klondike). Ingen reklame, ingen konto, virker uten nett.',
+          name: 'Klondike Solitaire',
+          short_name: 'Solitaire',
+          description: 'Klassisk Solitaire (Klondike). Ingen reklame, ingen konto, virker uten nett.',
           start_url: './',
           scope: './',
           display: 'standalone',

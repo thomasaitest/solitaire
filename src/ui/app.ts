@@ -790,7 +790,7 @@ export function startApp(root: HTMLElement): void {
         <header class="sheet-head">
           <div>
             <h2 id="menu-title">Valg</h2>
-            <p class="sheet-sub">Kabal · kortgiv ${dealLabel(state.seed)} · ${state.drawCount === 1 ? 'ett kort' : 'tre kort'}</p>
+            <p class="sheet-sub">Solitaire · kortgiv ${dealLabel(state.seed)} · ${state.drawCount === 1 ? 'ett kort' : 'tre kort'}</p>
           </div>
           <button type="button" class="icon-btn" id="close-menu" aria-label="Lukk">${closeIcon()}</button>
         </header>
@@ -862,7 +862,7 @@ export function startApp(root: HTMLElement): void {
     const suits = SUITS.map((suit) => suitSvg(suit, 28, suit === 'h' || suit === 'd' ? '#ff3b30' : '#1c1c1e')).join('');
     showOverlay(`
       <div class="modal win-dialog" role="dialog" aria-modal="true" aria-labelledby="win-title">
-        <p class="eyebrow">Kabal</p>
+        <p class="eyebrow">Solitaire</p>
         <h2 id="win-title">Godt spilt!</h2>
         <p class="modal-copy">Alle 52 kortene er lagt opp.</p>
         <div class="suit-row">${suits}</div>
